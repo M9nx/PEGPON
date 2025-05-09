@@ -1,0 +1,15 @@
+# Backup files
+*~
+*.bak
+*.swp
+*.swo
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Output folders
+recon/
