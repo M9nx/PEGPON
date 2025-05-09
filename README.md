@@ -13,7 +13,7 @@ Author: [M9nx](https://github.com/M9nx)
 - URL filtering by extension
 
 
-## 🚀 Usage
+##  Usage
 
 ```bash
 recon -d example.com       
