@@ -11,16 +11,13 @@ Author: [M9nx](https://github.com/M9nx)
 - Crawling with Katana
 - Historical URL fetching (Waybackurls, GAU)
 - URL filtering by extension
-- Screenshots with Gowitness
+
 
 ## 🚀 Usage
 
 ```bash
-recon -d example.com -m all          # Run all modules
-recon -d example.com -m passive      # Run only passive recon
-recon -d example.com -m active       # Run only active fuzzing
-recon -d example.com -m httpx        # Probe live subdomains
-recon -i domains.txt -m passive      # Run passive recon on list
+recon -d example.com       
+recon -l list.txt    
 ```
 ## Requirements:
 
