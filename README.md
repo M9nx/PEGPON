@@ -36,7 +36,16 @@ ffuf, httpx, gobuster, katana, waybackurls, gau, gowitness
 
 ```bash
 git clone https://github.com/M9nx/recon-tool.git
-cd recon-script
+cd recon-tool
+```
+and 
+
+```bash
+nano recon
+```
+Then set your github Token and Chaoos Token (line 58,81)
+
+```bash
 chmod +x recon
 sudo mv recon /usr/local/bin/recon
 ```
