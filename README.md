@@ -47,5 +47,5 @@ Then set your github Token and Chaoos Token (line 58,81)
 
 ```bash
 chmod +x recon
-sudo mv recon /usr/local/bin/recon
+sudo mv recon /usr/local/bin/
 ```
