@@ -21,3 +21,22 @@ recon -d example.com -m passive      # Run only passive recon
 recon -d example.com -m active       # Run only active fuzzing
 recon -d example.com -m httpx        # Probe live subdomains
 recon -i domains.txt -m passive      # Run passive recon on list
+```
+## Requirements:
+
+bash, jq, curl
+
+Tools installed:
+
+subfinder, assetfinder, sublist3r, findomain, chaos, github-subdomains
+
+ffuf, httpx, gobuster, katana, waybackurls, gau, gowitness
+
+## Installation
+
+```bash
+git clone https://github.com/M9nx/recon-tool.git
+cd recon-script
+chmod +x recon
+sudo mv recon /usr/local/bin/recon
+```
