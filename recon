@@ -2,267 +2,271 @@
 
 banner() {
 cat << "EOF"
-    ____                        _       
-   |  _ \ ___  ___ ___  _ __ __| | ___  
-   | |_) / _ \/ __/ _ \| '__/ _` |/ _ \ 
-   |  _ <  __/ (_| (_) | | | (_| |  __/ 
-   |_| \_\___|\___\___/|_|  \__,_|\___| 
+____                        _
+|  _ \ ___  ___ ___  _ __ __| | ___ 
+| |_) / _ \/ __/ _ \| '__/ _` |/ _ \
+|  _ <  __/ (_| (_) | | | (_| |  __/
+|_| \_\___|\___\___/|_|  \__,_|\___|
 
-             github.com/M9nx           
+```
+         github.com/M9nx           
+```
 EOF
 }
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$log_file"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$log_file"
 }
 
 usage() {
-    echo "Usage: recon -d domain.com [-l domains.txt] [-m modules]"
-    echo "  -d domain.com      Single domain"
-    echo "  -l domains.txt     List of domains"
-    echo "  -m modules         Comma-separated: passive,active,ffuf,httpx,gobuster,katana,wayback,gau,combine,filter,gowitness,all"
-    exit 1
+echo "Usage: recon -d domain.com [-l domains.txt] [-m modules] [-o output_dir] [-i input_file]"
+echo "  -d domain.com      Single domain"
+echo "  -l domains.txt     List of domains"
+echo "  -m modules         Comma-separated: passive,active,ffuf,httpx,gobuster,katana,wayback,gau,combine,filter,gowitness,all"
+echo "  -o output_dir      Output directory (optional)"
+echo "  -i input_file      Input file for applicable modules (optional)"
+exit 1
 }
 
-while getopts "d:l:m:" opt; do
-    case $opt in
-        d) domain="$OPTARG";;
-        l) domain_list="$OPTARG";;
-        m) modules="$OPTARG";;
-        *) usage;;
-    esac
+while getopts "d:l:m:o:i:" opt; do
+  case $opt in
+    d) domain="$OPTARG";;
+    l) domain_list="$OPTARG";;
+    m) modules="$OPTARG";;
+    o) global_output_dir="$OPTARG";;
+    i) global_input_file="$OPTARG";;
+    *) usage;;
+  esac
 done
 
 if [[ -z "$domain" && -z "$domain_list" ]]; then
-    usage
+  usage
 fi
 
 if [[ -z "$modules" ]]; then
-    modules="all"
+  modules="all"
 fi
 
 banner
 
 domains=()
 if [[ -n "$domain" ]]; then
-    domains+=("$domain")
+  domains+=("$domain")
 fi
 if [[ -n "$domain_list" ]]; then
-    mapfile -t file_domains < "$domain_list"
-    domains+=("${file_domains[@]}")
+  mapfile -t file_domains < "$domain_list"
+  domains+=("${file_domains[@]}")
 fi
 
 run_passive_recon() {
-    log "Running Passive Recon..."
+log "Running Passive Recon..."
+export CHAOS_KEY="Your_CHAOS_KEY"
+mkdir -p "$output_dir"
 
-    export CHAOS_KEY="Your_CHAOS_KEY"
-    mkdir -p "$output_dir"
+log "Using Subfinder..."
+subfinder -d $d -o $output_dir/subfinder.txt
 
-    log "Using Subfinder..."
-    subfinder -d $d -o $output_dir/subfinder.txt
+log "Using Assetfinder..."
+assetfinder --subs-only $d >$output_dir/assetfinder.txt
 
-    log "Using Assetfinder..."
-    assetfinder --subs-only $d >$output_dir/assetfinder.txt
+log "Using Sublist3r..."
+sublist3r -d $d -o $output_dir/sublist3r.txt
 
-    log "Using Sublist3r..."
-    sublist3r -d $d -o $output_dir/sublist3r.txt
+log "Using crt.sh..."
+curl -s "https://crt.sh/?q=%25.$d&output=json" | jq -r '.[].name_value' | sed 's/\*\.//g' | grep -iE "([a-z0-9_\-]+\.)+$d$" | sort -u >$output_dir/crtsh.txt
 
-    log "Using crt.sh..."
-    curl -s "https://crt.sh/?q=%25.$d&output=json" | jq -r '.[].name_value' | sed 's/\*\.//g' | grep -iE "([a-z0-9_\-]+\.)+$d$" | sort -u >$output_dir/crtsh.txt
+log "Using Findomain..."
+findomain --target $d --quiet --output
+mv "$d.txt" "$output_dir/findomain.txt"
 
-    log "Using Findomain..."
-    findomain --target $d --quiet --output
-    mv "$d.txt" "$output_dir/findomain.txt"
+log "Using Chaos dataset..."
+chaos -d $d -o $output_dir/chaos.txt
 
-    log "Using Chaos dataset..."
-    chaos -d $d -o $output_dir/chaos.txt
+if [ ! -z "$GITHUB_TOKEN" ]; then
+    log "Using GitHub-subdomains..."
+    github-subdomains -d $d -t $GITHUB_TOKEN -o $output_dir/github.txt
+else
+    log "Skipping GitHub-subdomains: GITHUB_TOKEN not set."
+fi
 
-    export GITHUB_TOKEN="GIthub-Token"
-    if [ ! -z "$GITHUB_TOKEN" ]; then
-        log "Using GitHub-subdomains..."
-        github-subdomains -d $d -t $GITHUB_TOKEN -o $output_dir/github.txt
-    else
-        log "Skipping GitHub-subdomains: GITHUB_TOKEN not set."
-    fi
-
-    log "Combining and sorting results..."
-    cat $output_dir/*.txt | sort -u >$output_dir/passive_subdomains.txt
-
-    log "Cleaning up temporary files..."
-    find $output_dir -type f -name '*.txt' ! -name 'passive_subdomains.txt' -delete
-
-    log "Passive recon completed."
+log "Combining and sorting results..."
+cat $output_dir/*.txt | sort -u >$output_dir/passive_subdomains.txt
+log "Cleaning up temporary files..."
+find $output_dir -type f -name '*.txt' ! -name 'passive_subdomains.txt' -delete
+log "Passive recon completed."
 }
 
 run_active_recon() {
-    log "Running FFUF Subdomain Fuzzing..."
-    wordlist="/usr/share/dirb/wordlists/common.txt"
-    tmp_file="$output_dir/tmp_active_subdomains.txt"
-    >"$tmp_file"
+log "Running FFUF Subdomain Fuzzing..."
+wordlist="/usr/share/dirb/wordlists/common.txt"
+tmp_file="$output_dir/tmp_active_subdomains.txt"
+>"$tmp_file"
 
-    log "[Level 1] Fuzzing FUZZ.$d"
-    ffuf -w $wordlist -u "https://FUZZ.$d" -H "Host: FUZZ.$d" -fs 0 -s -o "$output_dir/ffuf_lvl1.json" -of json
-    level1_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl1.json")
+log "[Level 1] Fuzzing FUZZ.$d"
+ffuf -w $wordlist -u "https://FUZZ.$d" -H "Host: FUZZ.$d" -fs 0 -s -o "$output_dir/ffuf_lvl1.json" -of json
+level1_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl1.json")
 
-    if [[ -n "$level1_results" ]]; then
-        echo "$level1_results" | sed "s|$|.$d|" >>"$tmp_file"
-        rm "$output_dir/ffuf_lvl1.json"
-        for sub1 in $level1_results; do
-            log "[Level 2] Fuzzing FUZZ.$sub1.$d"
-            ffuf -w $wordlist -u "https://FUZZ.$sub1.$d" -H "Host: FUZZ.$sub1.$d" -fs 0 -s -o "$output_dir/ffuf_lvl2_${sub1}.json" -of json
-            level2_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl2_${sub1}.json")
-            if [[ -n "$level2_results" ]]; then
-                echo "$level2_results" | sed "s|$|.$sub1.$d|" >>"$tmp_file"
-                for sub2 in $level2_results; do
-                    log "[Level 3] Fuzzing FUZZ.$sub2.$sub1.$d"
-                    ffuf -w $wordlist -u "https://FUZZ.$sub2.$sub1.$d" -H "Host: FUZZ.$sub2.$sub1.$d" -fs 0 -s -o "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json" -of json
-                    level3_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json")
-                    if [[ -n "$level3_results" ]]; then
-                        echo "$level3_results" | sed "s|$|.$sub2.$sub1.$d|" >>"$tmp_file"
-                    fi
-                    rm "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json"
-                done
-            fi
-            rm "$output_dir/ffuf_lvl2_${sub1}.json"
-        done
-    else
-        log "No results found at Level 1. Halting recursion."
-        rm "$output_dir/ffuf_lvl1.json"
-    fi
+if [[ -n "$level1_results" ]]; then
+    echo "$level1_results" | sed "s|$|.$d|" >>"$tmp_file"
+    rm "$output_dir/ffuf_lvl1.json"
+    for sub1 in $level1_results; do
+        log "[Level 2] Fuzzing FUZZ.$sub1.$d"
+        ffuf -w $wordlist -u "https://FUZZ.$sub1.$d" -H "Host: FUZZ.$sub1.$d" -fs 0 -s -o "$output_dir/ffuf_lvl2_${sub1}.json" -of json
+        level2_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl2_${sub1}.json")
+        if [[ -n "$level2_results" ]]; then
+            echo "$level2_results" | sed "s|$|.$sub1.$d|" >>"$tmp_file"
+            for sub2 in $level2_results; do
+                log "[Level 3] Fuzzing FUZZ.$sub2.$sub1.$d"
+                ffuf -w $wordlist -u "https://FUZZ.$sub2.$sub1.$d" -H "Host: FUZZ.$sub2.$sub1.$d" -fs 0 -s -o "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json" -of json
+                level3_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json")
+                if [[ -n "$level3_results" ]]; then
+                    echo "$level3_results" | sed "s|$|.$sub2.$sub1.$d|" >>"$tmp_file"
+                fi
+                rm "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json"
+            done
+        fi
+        rm "$output_dir/ffuf_lvl2_${sub1}.json"
+    done
+else
+    log "No results found at Level 1. Halting recursion."
+    rm "$output_dir/ffuf_lvl1.json"
+fi
 
-    sort -u "$tmp_file" >"$output_dir/active_subdomains.txt"
-    rm "$tmp_file"
-    log "Active recon completed."
+sort -u "$tmp_file" >"$output_dir/active_subdomains.txt"
+rm "$tmp_file"
+log "Active recon completed."
 }
 
 run_ffuf_passive() {
-    log "Fuzzing passive subdomains..."
-    wordlist="/usr/share/dirb/wordlists/common.txt"
-    passive_file="$output_dir/passive_subdomains.txt"
-    tmp_file="$output_dir/tmp_active_passive.txt"
-    >"$tmp_file"
+log "Fuzzing passive subdomains..."
+wordlist="/usr/share/dirb/wordlists/common.txt"
+passive_file="${global_input_file:-$output_dir/passive_subdomains.txt}"
+tmp_file="$output_dir/tmp_active_passive.txt"
+>"$tmp_file"
 
-    while read -r base; do
-        current_subs="$base"
-        for level in {1..3}; do
-            next_subs=""
-            for sub in $current_subs; do
-                log "[Level $level] Fuzzing FUZZ.$sub"
-                ffuf -w "$wordlist" -u "https://FUZZ.$sub" -H "Host: FUZZ.$sub" -fs 0 -s -o "$output_dir/ffuf_${sub}_lvl${level}.json" -of json
-                fuzz_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_${sub}_lvl${level}.json")
-                if [[ -n "$fuzz_results" ]]; then
-                    echo "$fuzz_results" | sed "s|$|.$sub|" >>"$tmp_file"
-                    next_subs="$next_subs $(echo "$fuzz_results" | sed "s|$|.$sub|")"
-                fi
-                rm "$output_dir/ffuf_${sub}_lvl${level}.json"
-            done
-            current_subs="$next_subs"
+while read -r base; do
+    current_subs="$base"
+    for level in {1..3}; do
+        next_subs=""
+        for sub in $current_subs; do
+            log "[Level $level] Fuzzing FUZZ.$sub"
+            ffuf -w "$wordlist" -u "https://FUZZ.$sub" -H "Host: FUZZ.$sub" -fs 0 -s -o "$output_dir/ffuf_${sub}_lvl${level}.json" -of json
+            fuzz_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_${sub}_lvl${level}.json")
+            if [[ -n "$fuzz_results" ]]; then
+                echo "$fuzz_results" | sed "s|$|.$sub|" >>"$tmp_file"
+                next_subs="$next_subs $(echo "$fuzz_results" | sed "s|$|.$sub|")"
+            fi
+            rm "$output_dir/ffuf_${sub}_lvl${level}.json"
         done
-    done <"$passive_file"
+        current_subs="$next_subs"
+    done
+done <"$passive_file"
 
-    sort -u "$tmp_file" >"$output_dir/active_passive_subdomains.txt"
-    rm "$tmp_file"
-    log "Passive fuzzing completed."
+sort -u "$tmp_file" >"$output_dir/active_passive_subdomains.txt"
+rm "$tmp_file"
+log "Passive fuzzing completed."
 }
 
 run_httpx() {
-    log "Probing live subdomains..."
-    combined_file="$output_dir/combined_subdomains.txt"
-    cat "$output_dir/active_subdomains.txt" "$output_dir/active_passive_subdomains.txt" | sort -u >"$combined_file"
-    httpx -l "$combined_file" -o "$output_dir/final_live_subdomains.txt"
-    rm "$combined_file"
-    log "Httpx probing completed."
+log "Probing live subdomains..."
+combined_file="${global_input_file:-$output_dir/combined_subdomains.txt}"
+cat "$output_dir/active_subdomains.txt" "$output_dir/active_passive_subdomains.txt" | sort -u >"$combined_file"
+httpx -l "$combined_file" -o "$output_dir/final_live_subdomains.txt"
+[[ "$combined_file" != "$global_input_file" ]] && rm "$combined_file"
+log "Httpx probing completed."
 }
 
 run_gobuster() {
-    log "Running Gobuster..."
-    combined_output="$output_dir/gobuster_all_results.txt"
-    >"$combined_output"
-    for url in $(cat "$output_dir/final_live_subdomains.txt"); do
-        clean_url=$(echo "$url" | sed 's|https\?://||g' | sed 's|/|_|g' | sed 's|:|_|g')
-        temp_output="$output_dir/gobuster_${clean_url}.txt"
-        log "Scanning $url"
-        gobuster dir -u "$url" -w /usr/share/wordlists/dirb/common.txt -t 50 -q -o "$temp_output"
-        echo "Results for $url" >>"$combined_output"
-        cat "$temp_output" >>"$combined_output"
-        echo -e "\n-----------------------------\n" >>"$combined_output"
-        rm "$temp_output"
-    done
-    log "Gobuster completed."
+log "Running Gobuster..."
+combined_input="${global_input_file:-$output_dir/final_live_subdomains.txt}"
+combined_output="$output_dir/gobuster_all_results.txt"
+>"$combined_output"
+
+while read -r url; do
+  clean_url=$(echo "$url" | sed 's|https\?://||g' | sed 's|/|*|g' | sed 's|:|*|g')
+  temp_output="$output_dir/gobuster_${clean_url}.txt"
+  log "Scanning $url"
+  gobuster dir -u "$url" -w /usr/share/wordlists/dirb/common.txt -t 50 -q -o "$temp_output"
+  echo "Results for $url" >>"$combined_output"
+  cat "$temp_output" >>"$combined_output"
+  echo -e "\n-----------------------------\n" >>"$combined_output"
+  rm "$temp_output"
+done < "$combined_input"
+log "Gobuster completed."
 }
 
 run_katana() {
-    log "Running Katana..."
-    katana -list "$output_dir/final_live_subdomains.txt" -depth 3 -o "$output_dir/katana_urls.txt"
+log "Running Katana..."
+katana -list "${global_input_file:-$output_dir/final_live_subdomains.txt}" -depth 3 -o "$output_dir/katana_urls.txt"
 }
 
 run_waybackurls() {
-    log "Running Waybackurls..."
-    cat "$output_dir/final_live_subdomains.txt" | waybackurls >"$output_dir/wayback_urls.txt"
+log "Running Waybackurls..."
+cat "${global_input_file:-$output_dir/final_live_subdomains.txt}" | waybackurls >"$output_dir/wayback_urls.txt"
 }
 
 run_gau() {
-    log "Running GAU..."
-    combined_output="$output_dir/gau_all_urls.txt"
-    >"$combined_output"
-    while read -r subdomain; do
-        gau "$subdomain" >>"$combined_output"
-    done <"$output_dir/final_live_subdomains.txt"
-    sort -u "$combined_output" -o "$combined_output"
+log "Running GAU..."
+combined_output="$output_dir/gau_all_urls.txt"
+>"$combined_output"
+while read -r subdomain; do
+gau "$subdomain" >>"$combined_output"
+done < "${global_input_file:-$output_dir/final_live_subdomains.txt}"
+sort -u "$combined_output" -o "$combined_output"
 }
 
 combine_all_urls() {
-    log "Combining URLs..."
-    cat "$output_dir/katana_urls.txt" "$output_dir/wayback_urls.txt" "$output_dir/gau_all_urls.txt" | sort -u >"$output_dir/all_urls.txt"
+log "Combining URLs..."
+cat "$output_dir/katana_urls.txt" "$output_dir/wayback_urls.txt" "$output_dir/gau_all_urls.txt" | sort -u >"$output_dir/all_urls.txt"
 }
 
 filter_urls() {
-    log "Filtering URLs..."
-    grep -E '\.js$' $output_dir/all_urls.txt >$output_dir/js_urls.txt
-    grep -E '\.php$' $output_dir/all_urls.txt >$output_dir/php_urls.txt
-    grep -E '\.aspx$' $output_dir/all_urls.txt >$output_dir/aspx_urls.txt
-    grep -E '\.jsp$' $output_dir/all_urls.txt >$output_dir/jsp_urls.txt
-    grep -E '\.json$' $output_dir/all_urls.txt >$output_dir/json_urls.txt
+log "Filtering URLs..."
+grep -E '.js$' $output_dir/all_urls.txt >$output_dir/js_urls.txt
+grep -E '.php$' $output_dir/all_urls.txt >$output_dir/php_urls.txt
+grep -E '.aspx$' $output_dir/all_urls.txt >$output_dir/aspx_urls.txt
+grep -E '.jsp$' $output_dir/all_urls.txt >$output_dir/jsp_urls.txt
+grep -E '.json$' $output_dir/all_urls.txt >$output_dir/json_urls.txt
 }
 
 run_gowitness() {
-    log "Running Gowitness..."
-    gowitness scan --input-file "$output_dir/all_urls.txt" --threads 5
+log "Running Gowitness..."
+gowitness scan --input-file "${global_input_file:-$output_dir/all_urls.txt}" --threads 5
 }
 
 for d in "${domains[@]}"; do
-    output_dir="recon/$d"
-    mkdir -p "$output_dir"
-    log_file="$output_dir/recon.log"
+  output_dir="${global_output_dir:-recon/$d}"
+  mkdir -p "$output_dir"
+  log_file="$output_dir/recon.log"
 
-    IFS=',' read -ra mods <<< "$modules"
-    for m in "${mods[@]}"; do
-        case $m in
-            passive) run_passive_recon;;
-            active) run_active_recon;;
-            ffuf) run_ffuf_passive;;
-            httpx) run_httpx;;
-            gobuster) run_gobuster;;
-            katana) run_katana;;
-            wayback) run_waybackurls;;
-            gau) run_gau;;
-            combine) combine_all_urls;;
-            filter) filter_urls;;
-            gowitness) run_gowitness;;
-            all)
-                run_passive_recon
-                run_active_recon
-                run_ffuf_passive
-                run_httpx
-                run_gobuster
-                run_katana
-                run_waybackurls
-                run_gau
-                combine_all_urls
-                filter_urls
-                run_gowitness
-                ;;
-            *) echo "Unknown module: $m"; usage;;
-        esac
-    done
+  IFS=',' read -ra mods <<< "$modules"
+  for m in "${mods[@]}"; do
+    case $m in
+      passive) run_passive_recon;;
+      active) run_active_recon;;
+      ffuf) run_ffuf_passive;;
+      httpx) run_httpx;;
+      gobuster) run_gobuster;;
+      katana) run_katana;;
+      wayback) run_waybackurls;;
+      gau) run_gau;;
+      combine) combine_all_urls;;
+      filter) filter_urls;;
+      gowitness) run_gowitness;;
+      all)
+        run_passive_recon
+        run_active_recon
+        run_ffuf_passive
+        run_httpx
+        run_gobuster
+        run_katana
+        run_waybackurls
+        run_gau
+        combine_all_urls
+        filter_urls
+        run_gowitness
+        ;;
+      *) echo "Unknown module: $m"; usage;;
+    esac
+  done
 done
