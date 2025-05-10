@@ -27,22 +27,22 @@ Tools installed:
 
 subfinder, assetfinder, sublist3r, findomain, chaos, github-subdomains
 
-ffuf, httpx, gobuster, katana, waybackurls, gau, gowitness
+ffuf, httpx, gobuster, katana, waybackurls, gau
 
 ## Installation
 
 ```bash
-git clone https://github.com/M9nx/recon-tool.git
-cd recon-tool
+git clone https://github.com/M9nx/PEGPON.git
+cd PEGPON
 ```
 and 
 
 ```bash
-nano recon
+nano pegpon
 ```
 Then set your github Token and Chaoos Token (line 58,81)
 
 ```bash
-chmod +x recon
-sudo mv recon /usr/local/bin/
+chmod +x pegpon
+sudo mv pegpon /usr/local/bin/
 ```
