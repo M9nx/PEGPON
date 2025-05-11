@@ -41,11 +41,13 @@ sudo apt install jq curl git python3
 go install -v github.com/projectdiscovery/subfinder/v2@latest
 go install -v github.com/tomnomnom/assetfinder@latest
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-go install -v github.com/hakluke/hakrawler@latest
+go install github.com/tomnomnom/waybackurls@latest
 go install -v github.com/lc/gau@latest
 go install -v github.com/projectdiscovery/katana/cmd/katana@latest
 ````
-
+```bash
+cd 
+```
 Also clone:
 
 * [`dirsearch`](https://github.com/maurosoria/dirsearch)
