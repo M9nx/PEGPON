@@ -42,11 +42,11 @@ run_recon_for_domain() {
         log "Running Passive Recon..."
 
         # Export Chaos API Key
-        export CHAOS_KEY="YOUR_TOKEN"
-        export GITHUB_TOKEN="YOUR_TOKEN"
-        export SECURITYTRAILS_KEY="YOUR_KEY" 
-        export NETLAS_API_KEY="YOUR_KEY"     
-        export ZOOMEYE_API_KEY="YOUR_KEY"
+        export CHAOS_KEY="YOUR_TOKEN"  # put ur token
+        export GITHUB_TOKEN="YOUR_TOKEN" # put ur token
+        export SECURITYTRAILS_KEY="YOUR_KEY"  # put ur key
+        export NETLAS_API_KEY="YOUR_KEY"     # put ur key
+        export ZOOMEYE_API_KEY="YOUR_KEY" # put ur key
 
         # Make sure output dir exists
         mkdir -p "$output_dir"
@@ -158,7 +158,7 @@ run_recon_for_domain() {
     # Active Subdomain Enumeration via FFUF Subdomain Fuzzing
     run_active_recon() {
         log "Running FFUF Subdomain Fuzzing..."
-        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt"
+        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt" # --> update this path to ur path
 
         # Create output directory if not exists
         mkdir -p "$output_dir"
@@ -216,7 +216,7 @@ run_recon_for_domain() {
     # Fuzzing Passive Subdomins with ffuf
     run_ffuf_passive() {
         log "Fuzzing passive subdomains with ffuf..."
-        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt"
+        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt" # --> update this path to ur path
         passive_file="$output_dir/passive_subdomains.txt"
 
         mkdir -p "$output_dir"
