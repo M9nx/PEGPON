@@ -71,7 +71,7 @@ Set your API keys inside the script:
 ## ⚙ Installation
 
 ```bash
-git clone https://github.com/youruser/pegpon
+git clone https://github.com/M9nx/pegpon
 cd pegpon
 chmod +x pegpon
 sudo mv pegpon /usr/local/bin/
