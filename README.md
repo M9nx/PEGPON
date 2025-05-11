@@ -60,11 +60,12 @@ Make sure all tools are in your `$PATH`.
 
 Set your API keys inside the script:
 
-* Chaos
-* GitHub
-* SecurityTrails
-* Netlas
-* Zoomeye
+* Chaos [https://chaos.projectdiscovery.io/]
+* GitHub [https://github.com/settings/tokens]
+* SecurityTrails [https://securitytrails.com/]
+* Netlas [https://docs.netlas.io/automation/how_to_get_api_key/]
+* Zoomeye [https://www.zoomeye.ai/]
+* ShrewdEye [https://shrewdeye.app/search]
 
 ---
 
