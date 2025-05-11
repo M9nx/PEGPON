@@ -42,11 +42,11 @@ run_recon_for_domain() {
         log "Running Passive Recon..."
 
         # Export Chaos API Key
-        export CHAOS_KEY="d34657f0-33a3-4645-be5c-e3215513852c"
-        export GITHUB_TOKEN="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"
-        export SECURITYTRAILS_KEY="30HDfBsd87UmJGh78Hd40-gNQwCKI10S"  #-->new
-        export NETLAS_API_KEY="4lmdmURzX8eRsJjiKplUdRF3WKRProY8"      #-->new
-        export ZOOMEYE_API_KEY="48A6817D-FCC3-f3535-1df3-cab4159b7fd" #-->new
+        export CHAOS_KEY="YOUR_TOKEN"
+        export GITHUB_TOKEN="YOUR_TOKEN"
+        export SECURITYTRAILS_KEY="YOUR_KEY" 
+        export NETLAS_API_KEY="YOUR_KEY"     
+        export ZOOMEYE_API_KEY="YOUR_KEY"
 
         # Make sure output dir exists
         mkdir -p "$output_dir"
