@@ -1,48 +1,124 @@
-# Recon Script
 
- **Automated Reconnaissance Tool for Bug Bounty Hunting**  
-Author: [M9nx](https://github.com/M9nx)
+```
+██████╗ ███████╗ ██████╗ ██████╗  ██████╗ ███╗   ██╗
+██╔══██╗██╔════╝██╔════╝ ██╔══██╗██╔═══██╗████╗  ██║
+██████╔╝█████╗  ██║  ███╗██████╔╝██║   ██║██╔██╗ ██║
+██╔═══╝ ██╔══╝  ██║   ██║██╔═══╝ ██║   ██║██║╚██╗██║
+██║     ███████╗╚██████╔╝██║     ╚██████╔╝██║ ╚████║
+╚═╝     ╚══════╝ ╚═════╝ ╚═╝      ╚═════╝ ╚═╝  ╚═══╝
+
+        [ PEGPON - v1.1   @M9nx ]
+```
+
+````markdown
+# PEGPON - Subdomain & Web Recon Automation
+
+PEGPON is an advanced Bash-based automation tool for subdomain enumeration, fuzzing, and web reconnaissance.  
+It leverages top-tier tools like `subfinder`, `assetfinder`, `ffuf`, `httpx`, `gau`, `waybackurls`, `dirsearch`, `katana`, and more.
+
+>  Created by @M9nx for bug bounty & red teamers.
+
+---
 
 ##  Features
-- Passive subdomain enumeration (Subfinder, Assetfinder, Sublist3r, crt.sh, Findomain, Chaos, GitHub)
-- Active subdomain fuzzing with FFUF
-- Live host probing with Httpx
-- Directory brute-forcing with Gobuster
-- Crawling with Katana
-- Historical URL fetching (Waybackurls, GAU)
-- URL filtering by extension
 
+-  Passive & Active Subdomain Enumeration
+- ⚙ Multi-level subdomain fuzzing (3 levels deep)
+-  HTTP probing & filtering
+-  Directory brute-force with extensions
+- 🕷 URL collection (Wayback, GAU, Katana)
+-  URL filtering by file type (JS, PHP, JSON, etc.)
+-  Fully automated per domain
 
-##  Usage
+---
 
-```bash
-recon -d example.com       
-recon -l list.txt    
-```
-## Requirements:
+##  Requirements
 
-bash, jq, curl
-
-Tools installed:
-
-subfinder, assetfinder, sublist3r, findomain, chaos, github-subdomains
-
-ffuf, httpx, gobuster, katana, waybackurls, gau
-
-## Installation
+Install the following tools before using PEGPON:
 
 ```bash
-git clone https://github.com/M9nx/PEGPON.git
-cd PEGPON
-```
-and 
+sudo apt install jq curl git python3
+go install -v github.com/projectdiscovery/subfinder/v2@latest
+go install -v github.com/tomnomnom/assetfinder@latest
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install -v github.com/hakluke/hakrawler@latest
+go install -v github.com/lc/gau@latest
+go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+````
+
+Also clone:
+
+* [`dirsearch`](https://github.com/maurosoria/dirsearch)
+
+Make sure all tools are in your `$PATH`.
+
+---
+
+##  API Keys
+
+Set your API keys inside the script:
+
+* Chaos
+* GitHub
+* SecurityTrails
+* Netlas
+* Zoomeye
+
+---
+
+## ⚙ Installation
 
 ```bash
-nano pegpon
-```
-Then set your github Token and Chaoos Token (line 58,81)
-
-```bash
+git clone https://github.com/youruser/pegpon
+cd pegpon
 chmod +x pegpon
 sudo mv pegpon /usr/local/bin/
 ```
+
+---
+
+##  Usage
+
+### Single Domain
+
+```bash
+pegpon -d example.com
+```
+
+### List of Domains
+
+```bash
+pegpon -l domains.txt
+```
+
+---
+
+##  Output Structure
+
+```
+recon/
+  └── example.com/
+      ├── recon.log
+      ├── passive_subdomains.txt
+      ├── active_subdomains.txt
+      ├── final_live_subdomains.txt
+      ├── all_urls.txt
+      └── urls/
+          ├── js_urls.txt
+          ├── auth_urls.txt
+          └── ...
+```
+
+---
+
+## ⚠ Disclaimer
+
+This tool is for **educational and authorized testing** only.
+Do not use against targets without permission.
+
+---
+
+
+
+
+
