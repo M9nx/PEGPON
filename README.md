@@ -44,6 +44,8 @@ go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 go install github.com/tomnomnom/waybackurls@latest
 go install -v github.com/lc/gau@latest
 go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+go install -v github.com/Findomain/Findomain
+
 ````
 ```bash
 cd 
