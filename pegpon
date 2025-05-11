@@ -1,11 +1,16 @@
 #!/bin/bash
 
+# Colors for output
+RED="\e[31m"
+GREEN="\e[32m"
+YELLOW="\e[33m"
+RESET="\e[0m"
+
 # ┌─────────────────────────────────────────────┐
 # │                                             │
 # |         RECON TOOL - v1.0   @M9nx           │
 # │           Subdomain & Web Recon             |
 # └─────────────────────────────────────────────┘
-
 banner() {
     cat <<"EOF"
 
@@ -16,17 +21,14 @@ banner() {
 ██║     ███████╗╚██████╔╝██║     ╚██████╔╝██║ ╚████║
 ╚═╝     ╚══════╝ ╚═════╝ ╚═╝      ╚═════╝ ╚═╝  ╚═══╝
 
-      [ PEGPON - v1.0   @M9nx  ]
+        [ PEGPON - v1.1   @M9nx ]
 EOF
 }
-
-usage() {
-    echo -e "\nUsage: $0 -d <domain> | -l <domain_list.txt>"
-    exit 1
-}
-
+# Entry point
+banner
 run_recon_for_domain() {
     domain="$1"
+    echo "Running recon for: $domain"
     output_dir="recon/$domain"
     mkdir -p "$output_dir"
     log_file="$output_dir/recon.log"
@@ -40,7 +42,11 @@ run_recon_for_domain() {
         log "Running Passive Recon..."
 
         # Export Chaos API Key
-        export CHAOS_KEY="Your-Key"
+        export CHAOS_KEY="d34657f0-33a3-4645-be5c-e3215513852c"
+        export GITHUB_TOKEN="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"
+        export SECURITYTRAILS_KEY="30HDfBsd87UmJGh78Hd40-gNQwCKI10S"  #-->new
+        export NETLAS_API_KEY="4lmdmURzX8eRsJjiKplUdRF3WKRProY8"      #-->new
+        export ZOOMEYE_API_KEY="48A6817D-FCC3-f3535-1df3-cab4159b7fd" #-->new
 
         # Make sure output dir exists
         mkdir -p "$output_dir"
@@ -65,6 +71,24 @@ run_recon_for_domain() {
             grep -iE "([a-z0-9_\-]+\.)+$domain$" |
             sort -u >$output_dir/crtsh.txt
 
+        # ShrewdEye scraping (static HTML parsing)  -->new
+        log "Using ShrewdEye..."
+        curl -s "https://shrewdeye.app/?q=$domain" |
+            grep -oP '([a-zA-Z0-9_-]+\.)+'"$domain" |
+            sort -u >"$output_dir/shrewdeye.txt"
+
+        # SecurityTrails API (requires SECURITYTRAILS_KEY)  -->new
+        if [[ -z "$SECURITYTRAILS_KEY" ]]; then
+            log "Skipping SecurityTrails: SECURITYTRAILS_KEY not set."
+        else
+            log "Using SecurityTrails API..."
+            curl -s -H "APIKEY: $SECURITYTRAILS_KEY" \
+                "https://api.securitytrails.com/v1/domain/$domain/subdomains" |
+                jq -r '.subdomains[]' |
+                sed "s|$|.$domain|" |
+                sort -u >"$output_dir/securitytrails.txt"
+        fi
+
         # Findomain
         log "Using Findomain..."
         findomain --target $domain --quiet --output
@@ -75,13 +99,50 @@ run_recon_for_domain() {
         chaos -d $domain -o $output_dir/chaos.txt
 
         # GitHub Subdomains (requires GitHub token set in env var)
-        export GITHUB_TOKEN="YOUR-Token"
         if [ ! -z "$GITHUB_TOKEN" ]; then
             log "Using GitHub-subdomains..."
             github-subdomains -d $domain -t $GITHUB_TOKEN -o $output_dir/github.txt
         else
             log "Skipping GitHub-subdomains: GITHUB_TOKEN not set."
         fi
+
+        # Netlas.io (requires API key) #-->new
+        if [[ -n "$NETLAS_API_KEY" ]]; then
+            log "Using Netlas.io..."
+            curl -s "https://app.netlas.io/api/domains?q=domain:$domain" \
+                -H "X-API-Key: $NETLAS_API_KEY" |
+                jq -r '.items[].name' |
+                grep "$domain" |
+                sort -u >"$output_dir/netlas.txt"
+        else
+            log "Skipping Netlas.io: API key not set."
+        fi
+
+        # Bufferover.run #-->new
+        log "Using Bufferover..."
+        curl -s "https://dns.bufferover.run/dns?q=.$domain" |
+            jq -r '.FDNS_A[]?' |
+            cut -d',' -f2 |
+            grep "$domain" |
+            sort -u >"$output_dir/bufferover.txt"
+
+        # Zoomeye (requires API key) #-->new
+        if [[ -n "$ZOOMEYE_API_KEY" ]]; then
+            log "Using Zoomeye..."
+            curl -s -H "API-KEY: $ZOOMEYE_API_KEY" \
+                "https://api.zoomeye.org/domain/search?q=$domain" |
+                jq -r '.matches[].name' |
+                grep "$domain" |
+                sort -u >"$output_dir/zoomeye.txt"
+        else
+            log "Skipping Zoomeye: API key not set."
+        fi
+
+        # LeakIX #-->new
+        log "Using LeakIX..."
+        curl -s "https://leakix.net/domain/$domain" |
+            grep -oP '([a-zA-Z0-9_-]+\.)+'"$domain" |
+            sort -u >"$output_dir/leakix.txt"
 
         # Combine & deduplicate all results into passive_subdomains.txt
         log "Combining and sorting results..."
@@ -97,7 +158,7 @@ run_recon_for_domain() {
     # Active Subdomain Enumeration via FFUF Subdomain Fuzzing
     run_active_recon() {
         log "Running FFUF Subdomain Fuzzing..."
-        wordlist="/usr/share/dirb/wordlists/common.txt"
+        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt"
 
         # Create output directory if not exists
         mkdir -p "$output_dir"
@@ -155,7 +216,7 @@ run_recon_for_domain() {
     # Fuzzing Passive Subdomins with ffuf
     run_ffuf_passive() {
         log "Fuzzing passive subdomains with ffuf..."
-        wordlist="/usr/share/dirb/wordlists/common.txt"
+        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt"
         passive_file="$output_dir/passive_subdomains.txt"
 
         mkdir -p "$output_dir"
@@ -200,47 +261,40 @@ run_recon_for_domain() {
         log "Passive fuzzing completed. Results saved to $output_dir/active_passive_subdomains.txt"
     }
 
-    # HTTP Probing
-    run_httpx() {
+    # HTTP Probing 1
+    run_httpx1() {
         log "Probing live subdomains with Httpx..."
 
-        # Combine both files into a temp file
         combined_file="$output_dir/combined_subdomains.txt"
-        cat "$output_dir/active_subdomains.txt" "$output_dir/active_passive_subdomains.txt" | sort -u >"$combined_file"
+        cat "$output_dir/active_subdomains.txt" "$output_dir/passive_subdomains.txt" "$output_dir/active_passive_subdomains.txt" | sort -u >"$combined_file"
 
-        # Run httpx on the combined list
-        httpx -l "$combined_file" -o "$output_dir/final_live_subdomains.txt"
+        cat "$combined_file" | httpx -o "$output_dir/final_live_subdomains.txt"
 
-        # Remove the temp combined file
         rm "$combined_file"
 
         log "Httpx probing completed. Results saved to $output_dir/final_live_subdomains.txt"
     }
 
-    # Directory Enumeration
-    run_gobuster() {
-        log "Running Gobuster..."
+    #run_dirsearch_batch
+    run_dirsearch_batch() {
+        log "Running Dirsearch on all live subdomains..."
 
-        combined_output="$output_dir/gobuster_all_results.txt"
-        >"$combined_output"
+        input_file="$output_dir/final_live_subdomains.txt"
+        output_file="$output_dir/dirsearch_valid_urls.txt"
 
-        for url in $(cat "$output_dir/final_live_subdomains.txt"); do
+        if [[ ! -f "$input_file" ]]; then
+            echo -e "${RED}Error:${RESET} $input_file not found."
+            return
+        fi
 
-            clean_url=$(echo "$url" | sed 's|https\?://||g' | sed 's|/|_|g' | sed 's|:|_|g')
-            temp_output="$output_dir/gobuster_${clean_url}.txt"
+        dirsearch_exts="conf,config,bak,backup,swp,old,db,sql,asp,aspx,asp~,py,py~,rb,rb~,php,php~,bkp,cache,cgi,csv,html,inc,jar,js,json,jsp,jsp~,lock,log,rar,sql.gz,sql.tar.gz,sql~,swp~,tar,tar.bz2,tar.gz,txt,wadl,zip,xml"
 
-            log "Scanning $url with Gobuster..."
+        python3 dirsearch/dirsearch.py \
+            -l "$input_file" \
+            -e "$dirsearch_exts" \
+            --plain-text-report "$output_file"
 
-            gobuster dir -u "$url" -w /usr/share/wordlists/dirb/common.txt -t 50 -q -o "$temp_output"
-
-            echo "Results for $url" >>"$combined_output"
-            cat "$temp_output" >>"$combined_output"
-            echo -e "\n-----------------------------\n" >>"$combined_output"
-
-            rm "$temp_output"
-        done
-
-        log "Gobuster completed. All results saved to $combined_output"
+        log "Dirsearch scan completed. Results saved to $output_file"
     }
 
     # Crawling with Katana
@@ -282,14 +336,34 @@ run_recon_for_domain() {
         log "All URLs combined into $output_dir/all_urls.txt"
     }
 
+    # HTTP Probing 2
+    run_httpx2() {
+        log "all_urls.txt with Httpx..."
+
+        cat "$output_dir/all_urls.txt" | httpx -o "$output_dir/final_all_urls.txt"
+
+        log "Httpx probing completed. Results saved to $output_dir/final_all_urls.txt"
+    }
+
     # Filtering URLs by extensions
     filter_urls() {
         log "Filtering URLs by file extensions..."
-        grep -E '\\.js$' $output_dir/all_urls.txt >$output_dir/js_urls.txt
-        grep -E '\\.php$' $output_dir/all_urls.txt >$output_dir/php_urls.txt
-        grep -E '\\.aspx$' $output_dir/all_urls.txt >$output_dir/aspx_urls.txt
-        grep -E '\\.jsp$' $output_dir/all_urls.txt >$output_dir/jsp_urls.txt
-        grep -E '\\.json$' $output_dir/all_urls.txt >$output_dir/json_urls.txt
+
+        # Create the directory if it doesn't exist
+        mkdir -p "$output_dir/urls"
+
+        grep -iE '\.js([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/js_urls.txt"
+        grep -iE '\.php([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/php_urls.txt"
+        grep -iE '\.aspx([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/aspx_urls.txt"
+        grep -iE '\.jsp([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/jsp_urls.txt"
+        grep -iE '\.json([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/json_urls.txt"
+        grep -iE '\.txt([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/txt_urls.txt"
+        grep -iE '\.html([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/html_urls.txt"
+        grep -iE '\.css([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/css_urls.txt"
+        # Keyword filters (auth-related endpoints)
+        grep -iE 'login|signin|signup|auth|register|logout|password|reset' "$output_dir/all_urls.txt" >"$output_dir/urls/auth_urls.txt"
+
+        log "Filtering URLs by file extensions completed. Results saved in $output_dir."
     }
 
     # Run all modules
@@ -297,35 +371,90 @@ run_recon_for_domain() {
     run_passive_recon
     run_active_recon
     run_ffuf_passive
-    run_httpx
-    run_gobuster
+    run_httpx1
+    run_dirsearch_batch
     run_katana
     run_waybackurls
     run_gau
     combine_all_urls
+    run_httpx2
     filter_urls
 
     log "Recon automation completed. Results saved in $output_dir."
 }
 
-# Entry point
-banner
+#run_recon_main() {
+#     while getopts ":l:" opt; do
+#         case ${opt} in
+#         l)
+#             input_file="$OPTARG"
+#             if [[ ! -f "$input_file" ]]; then
+#                 echo "Error: File '$input_file' not found."
+#                 exit 1
+#             fi
 
-while getopts "d:l:" opt; do
+#             while read -r domain || [[ -n "$domain" ]]; do
+#                 [[ -z "$domain" ]] && continue
+#                 run_recon_for_domain "$domain"
+#             done <"$input_file"
+#             ;;
+#         \?)
+#             echo "Invalid option: -$OPTARG"
+#             exit 1
+#             ;;
+#         :)
+#             echo "Option -$OPTARG requires an argument."
+#             exit 1
+#             ;;
+#         esac
+#     done
+# }
+
+usage() {
+    echo -e "\nUsage: $0 -d <domain> | -l <domain_list.txt>"
+    exit 1
+}
+
+# Argument parsing
+while getopts ":d:l:" opt; do
     case $opt in
-    d) domain="$OPTARG" ;;
-    l) list="$OPTARG" ;;
-    *) usage ;;
+    d)
+        domain="$OPTARG"
+        run_recon_for_domain "$domain"
+        ;;
+    l)
+        list="$OPTARG"
+        if [[ ! -f "$list" ]]; then
+            echo "Error: File '$list' not found."
+            exit 1
+        fi
+        mapfile -t domains <"$list"
+        for domain in "${domains[@]}"; do
+            [[ -z "$domain" ]] && continue
+            run_recon_for_domain "$domain"
+        done
+
+        ;;
+    \?)
+        echo "Invalid option: -$OPTARG"
+        exit 1
+        ;;
+    :)
+        echo "Option -$OPTARG requires an argument."
+        exit 1
+        ;;
     esac
 done
 
-if [[ -n "$domain" ]]; then
-    run_recon_for_domain "$domain"
-elif [[ -n "$list" ]]; then
-    while IFS= read -r d || [[ -n "$d" ]]; do
-        [[ -z "$d" ]] && continue
-        run_recon_for_domain "$d"
-    done <"$list"
-else
+# Check if no options provided
+if [[ -z "$domain" && -z "$list" ]]; then
     usage
 fi
+
+# Check dependencies
+for tool in subfinder assetfinder httpx; do
+    if ! command -v $tool &>/dev/null; then
+        echo -e "${RED}Error:${RESET} '$tool' not found. Please install it."
+        exit 1
+    fi
+done
