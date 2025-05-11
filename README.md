@@ -10,7 +10,7 @@
         [ PEGPON - v1.1   @M9nx ]
 ```
 
-````markdown
+
 # PEGPON - Subdomain & Web Recon Automation
 
 PEGPON is an advanced Bash-based automation tool for subdomain enumeration, fuzzing, and web reconnaissance.  
@@ -23,10 +23,10 @@ It leverages top-tier tools like `subfinder`, `assetfinder`, `ffuf`, `httpx`, `g
 ##  Features
 
 -  Passive & Active Subdomain Enumeration
-- ⚙ Multi-level subdomain fuzzing (3 levels deep)
+-  Multi-level subdomain fuzzing (3 levels deep)
 -  HTTP probing & filtering
 -  Directory brute-force with extensions
-- 🕷 URL collection (Wayback, GAU, Katana)
+-  URL collection (Wayback, GAU, Katana)
 -  URL filtering by file type (JS, PHP, JSON, etc.)
 -  Fully automated per domain
 
@@ -111,7 +111,7 @@ recon/
 
 ---
 
-## ⚠ Disclaimer
+##  Disclaimer
 
 This tool is for **educational and authorized testing** only.
 Do not use against targets without permission.
