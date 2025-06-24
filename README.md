@@ -16,7 +16,7 @@
 PEGPON is an advanced Bash-based automation tool for subdomain enumeration, fuzzing, and web reconnaissance.  
 It leverages top-tier tools like `subfinder`, `assetfinder`, `ffuf`, `httpx`, `gau`, `waybackurls`, `dirsearch`, `katana`, and more.
 
->  Created by @[M9nx](https://x.com/__M9nx) for bug bounty & red teamers.
+>  Created by @[M9nx](https://x.com/__M9nx) for bug bounty 
 
 ---
 
