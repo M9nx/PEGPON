@@ -180,8 +180,6 @@ recon/
 
 ---
 
----
-
 ## Contributing
 We welcome contributions to PEGPON — whether it's fixing bugs, adding new recon modules, improving performance, or writing documentation. Your support helps make this tool more powerful for the bug bounty and security community.
 
