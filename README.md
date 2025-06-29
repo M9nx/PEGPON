@@ -99,7 +99,7 @@ Update the wordlist path used in `run_active_recon()`:
 wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt"
 ```
 
-➡ You can replace it with:
+ You can replace it with:
 
 * [SecLists DNS wordlists](https://github.com/danielmiessler/SecLists/tree/master/Discovery/DNS)
 * [assetnote wordlists](https://wordlists.assetnote.io/)
@@ -180,14 +180,12 @@ recon/
 
 ---
 
-##  Disclaimer
-
-This tool is for **educational and authorized testing** only.
-Do not use against targets without permission.
-
 ---
 
+## Contributing
+We welcome contributions to PEGPON — whether it's fixing bugs, adding new recon modules, improving performance, or writing documentation. Your support helps make this tool more powerful for the bug bounty and security community.
 
+---
 
 
 
