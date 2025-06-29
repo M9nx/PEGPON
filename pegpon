@@ -8,7 +8,7 @@ RESET="\e[0m"
 
 # ┌─────────────────────────────────────────────┐
 # │                                             │
-# |         RECON TOOL - v1.0   @M9nx           │
+# |         RECON TOOL - v1.2   @M9nx           │
 # │           Subdomain & Web Recon             |
 # └─────────────────────────────────────────────┘
 banner() {
@@ -47,6 +47,7 @@ run_recon_for_domain() {
         export SECURITYTRAILS_KEY="YOUR_KEY"  # put ur key
         export NETLAS_API_KEY="YOUR_KEY"     # put ur key
         export ZOOMEYE_API_KEY="YOUR_KEY" # put ur key
+        export VT_API_KEY="YOUR_KEY" # put ur key
 
         # Make sure output dir exists
         mkdir -p "$output_dir"
@@ -261,40 +262,130 @@ run_recon_for_domain() {
         log "Passive fuzzing completed. Results saved to $output_dir/active_passive_subdomains.txt"
     }
 
-    # HTTP Probing 1
-    run_httpx1() {
-        log "Probing live subdomains with Httpx..."
 
-        combined_file="$output_dir/combined_subdomains.txt"
-        cat "$output_dir/active_subdomains.txt" "$output_dir/passive_subdomains.txt" "$output_dir/active_passive_subdomains.txt" | sort -u >"$combined_file"
 
-        cat "$combined_file" | httpx -o "$output_dir/final_live_subdomains.txt"
+   #run_compain_subs
+   run_compain_subs() {
+    log "Running compain subs..."
+    
+    cat "$output_dir/active_subdomains.txt" "$output_dir/passive_subdomains.txt" "$output_dir/active_passive_subdomains.txt" > "$output_dir/final_live_subdomains.txt"
+    
+   }
 
-        rm "$combined_file"
 
-        log "Httpx probing completed. Results saved to $output_dir/final_live_subdomains.txt"
-    }
+    ## Fetcing ip's here 
+    resolve_all_possible_ips() {
+    log " Resolving all possible IPs for final live subdomains..."
+
+    input_file="$output_dir/final_live_subdomains.txt"
+    output_ips="$output_dir/resolved_ips.txt"
+    unique_ips="$output_dir/unique_ips.txt"
+
+    > "$output_ips"
+    > "$unique_ips"
+
+    if [[ ! -f "$input_file" ]]; then
+        log " ERROR: $input_file not found."
+        return
+    fi
+
+    while read -r sub; do
+        log " Resolving $sub"
+
+        #  dig
+        dig_ips=$(dig +short "$sub" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}')
+        [[ -n "$dig_ips" ]] && {
+            for ip in $dig_ips; do
+                echo "$sub => $ip" | tee -a "$output_ips"
+                echo "$ip" >> "$unique_ips"
+            done
+        }
+
+        #  SecurityTrails
+        if [[ -n "$SECURITYTRAILS_KEY" ]]; then
+            curl -s -H "APIKEY: $SECURITYTRAILS_KEY" \
+                "https://api.securitytrails.com/v1/domain/$sub/dns" |
+                jq -r '.records.a[].ip' 2>/dev/null |
+                grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' >> "$unique_ips"
+        fi
+
+        #  Netlas
+        if [[ -n "$NETLAS_API_KEY" ]]; then
+            curl -s "https://app.netlas.io/api/dns?q=name:$sub" \
+                -H "X-API-Key: $NETLAS_API_KEY" |
+                jq -r '.items[].data.A[]?' >> "$unique_ips"
+        fi
+
+        #  ViewDNS.info
+        curl -s "https://viewdns.info/dnsrecord/?domain=$sub" |
+            grep -oE "([0-9]{1,3}\.){3}[0-9]{1,3}" >> "$unique_ips"
+
+        #  VirusTotal
+        if [[ -n "$VT_API_KEY" ]]; then
+            vt_resp=$(curl -s -H "x-apikey: $VT_API_KEY" \
+                "https://www.virustotal.com/api/v3/domains/$sub/resolutions")
+            echo "$vt_resp" | jq -r '.data[].attributes.ip_address' >> "$unique_ips"
+        fi
+
+    done < "$input_file"
+
+    # Final cleanup
+    sort -u "$unique_ips" > "$unique_ips.tmp" && mv "$unique_ips.tmp" "$unique_ips"
+    log " IP resolution complete. Results saved to:"
+    log "   ➤ $output_ips"
+    log "   ➤ $unique_ips"
+}
+
+
 
     #run_dirsearch_batch
     run_dirsearch_batch() {
         log "Running Dirsearch on all live subdomains..."
 
-        input_file="$output_dir/final_live_subdomains.txt"
-        output_file="$output_dir/dirsearch_valid_urls.txt"
 
-        if [[ ! -f "$input_file" ]]; then
-            echo -e "${RED}Error:${RESET} $input_file not found."
+    subdomains_file="$output_dir/final_live_subdomains.txt"
+    ips_file="$output_dir/unique_ips.txt"
+    output_dirsearch="$output_dir/dirsearch_results"
+    mkdir -p "$output_dirsearch"
+
+        if [[ ! -f "$subdomains_file" ]]; then
+            echo -e "${RED}Error:${RESET} $subdomains_file not found."
             return
         fi
 
         dirsearch_exts="conf,config,bak,backup,swp,old,db,sql,asp,aspx,asp~,py,py~,rb,rb~,php,php~,bkp,cache,cgi,csv,html,inc,jar,js,json,jsp,jsp~,lock,log,rar,sql.gz,sql.tar.gz,sql~,swp~,tar,tar.bz2,tar.gz,txt,wadl,zip,xml"
 
+    # 1. Run Dirsearch on live subdomains
+    if [[ -f "$subdomains_file" ]]; then
+        log " Running Dirsearch on live subdomains..."
         python3 dirsearch/dirsearch.py \
-            -l "$input_file" \
-            -e "$dirsearch_exts" \
-            --plain-text-report "$output_file"
+            -l "$subdomains_file" \                      # List of subdomains (one per line)
+            -e "$dirsearch_exts" \                        # File extensions to brute-force
+            -t 20 \                                       # Number of threads
+            --plain-text-report "$output_dirsearch/dirsearch_domains.txt"
+    else
+        log " Subdomains file not found: $subdomains_file"
+    fi
 
-        log "Dirsearch scan completed. Results saved to $output_file"
+        # 2. Run Dirsearch on resolved IPs using Host header
+    if [[ -f "$ips_file" ]]; then
+        log " Running Dirsearch on IPs with Host: $domain"
+        for ip in $(cat "$ips_file"); do
+            for proto in http https; do
+                log "  Scanning $proto://$ip with Host: $domain"
+                python3 dirsearch/dirsearch.py \
+                    -u "$proto://$ip/" \                  # IP target
+                    -H "Host: $domain" \                  # Use domain in Host header to support virtual hosting
+                    -e "$dirsearch_exts" \                # Same extensions
+                    -t 20 \                               # Threads
+                    --plain-text-report "$output_dirsearch/dirsearch_${proto}_$ip.txt"
+            done
+        done
+    else
+        log " IPs file not found: $ips_file"
+    fi
+
+        log " Dirsearch scanning complete. Results saved in $output_dirsearch/"
     }
 
     # Crawling with Katana
@@ -327,14 +418,30 @@ run_recon_for_domain() {
 
     # Combine all URLs into all_urls.txt
     combine_all_urls() {
-        log "Combining Katana, Waybackurls, and GAU outputs..."
-        cat "$output_dir/katana_urls.txt" \
-            "$output_dir/wayback_urls.txt" \
-            "$output_dir/gau_all_urls.txt" |
-            sort -u >"$output_dir/all_urls.txt"
+    log " Combining Katana, Waybackurls, GAU, and Dirsearch outputs..."
 
-        log "All URLs combined into $output_dir/all_urls.txt"
-    }
+    all_urls="$output_dir/all_urls.txt"
+    > "$all_urls"  # clean existing file
+
+    # Combine Katana, Wayback, and GAU
+    cat "$output_dir/katana_urls.txt" \
+        "$output_dir/wayback_urls.txt" \
+        "$output_dir/gau_all_urls.txt" 2>/dev/null |
+        sort -u >> "$all_urls"
+
+    # Collect Dirsearch URLs (from plain-text reports)
+    log " Adding Dirsearch results..."
+    dirsearch_dir="$output_dir/dirsearch_results"
+    if [[ -d "$dirsearch_dir" ]]; then
+        grep -hEo "https?://[^ ]+" "$dirsearch_dir"/*.txt 2>/dev/null |
+            sort -u >> "$all_urls"
+    fi
+
+    # Final deduplication
+    sort -u "$all_urls" -o "$all_urls"
+
+    log " All URLs combined into $all_urls"
+}
 
     # HTTP Probing 2
     run_httpx2() {
@@ -371,7 +478,8 @@ run_recon_for_domain() {
     run_passive_recon
     run_active_recon
     run_ffuf_passive
-    run_httpx1
+    run_compain_subs
+    resolve_all_possible_ips
     run_dirsearch_batch
     run_katana
     run_waybackurls
