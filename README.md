@@ -33,31 +33,6 @@ It leverages top-tier tools like `subfinder`, `assetfinder`, `ffuf`, `httpx`, `g
 
 ---
 
-##  Requirements
-
-Install the following tools before using PEGPON:
-
-```bash
-sudo apt install jq curl git python3
-go install -v github.com/projectdiscovery/subfinder/v2@latest
-go install -v github.com/tomnomnom/assetfinder@latest
-go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-go install github.com/tomnomnom/waybackurls@latest
-go install -v github.com/lc/gau@latest
-go install -v github.com/projectdiscovery/katana/cmd/katana@latest
-go install -v github.com/Findomain/Findomain
-
-````
-```bash
-cd 
-```
-Also clone:
-
-* [`dirsearch`](https://github.com/maurosoria/dirsearch)
-
-Make sure all tools are in your `$PATH`.
-
----
 
 ##  API Keys
 
@@ -72,7 +47,7 @@ Set your API keys inside the script:
 
 ---
 
-## ⚙ Installation
+##  Installation
 
 ```bash
 git clone https://github.com/M9nx/pegpon
@@ -84,7 +59,7 @@ sudo mv pegpon /usr/local/bin/
 
 ---
 
-## ⚙️ Setup
+##  Setup
 
 Before running **PEGPON**, make sure to configure the following:
 
@@ -155,7 +130,7 @@ Make sure the following tools are installed:
 
 ---
 
-Let me know if you want me to generate a **`.env` loader**, or automate this whole setup with a `setup.sh` script 🔧
+Let me know if you want me to generate a **`.env` loader**, or automate this whole setup with a `setup.sh` script 
 
 
 ---
