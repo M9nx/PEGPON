@@ -1,14 +1,26 @@
 #!/bin/bash
 
+# Exit on error, undefined vars, and pipe failures
+set -euo pipefail
+
 # Colors for output
 RED="\e[31m"
 GREEN="\e[32m"
 YELLOW="\e[33m"
 RESET="\e[0m"
 
+# Check dependencies early
+REQUIRED_TOOLS=(subfinder assetfinder httpx ffuf jq curl katana waybackurls gau findomain chaos github-subdomains dnsx nuclei)
+for tool in "${REQUIRED_TOOLS[@]}"; do do
+    if ! command -v "$tool" &>/dev/null; then
+        echo -e "${RED}Error:${RESET} '$tool' not found. Please install it."
+        exit 1
+    fi
+done
+
 # ┌─────────────────────────────────────────────┐
 # │                                             │
-# |         RECON TOOL - v1.2   @M9nx           │
+# |         RECON TOOL - v1.0   @M9nx           │
 # │           Subdomain & Web Recon             |
 # └─────────────────────────────────────────────┘
 banner() {
@@ -42,12 +54,12 @@ run_recon_for_domain() {
         log "Running Passive Recon..."
 
         # Export Chaos API Key
-        export CHAOS_KEY="YOUR_TOKEN"  # put ur token
-        export GITHUB_TOKEN="YOUR_TOKEN" # put ur token
-        export SECURITYTRAILS_KEY="YOUR_KEY"  # put ur key
-        export NETLAS_API_KEY="YOUR_KEY"     # put ur key
-        export ZOOMEYE_API_KEY="YOUR_KEY" # put ur key
-        export VT_API_KEY="YOUR_KEY" # put ur key
+        export CHAOS_KEY="d34657f0-33a3-4645-be5c-e3215513852c"
+        export GITHUB_TOKEN="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"
+        export SECURITYTRAILS_KEY="30HDfBsd87UmJGh78Hd40-gNQwCKI10S"  #-->new
+        export NETLAS_API_KEY="4lmdmURzX8eRsJjiKplUdRF3WKRProY8"      #-->new
+        export ZOOMEYE_API_KEY="48A6817D-FCC3-f3535-1df3-cab4159b7fd" #-->new
+        export SHODAN_API_KEY="${SHODAN_API_KEY:-}"                   # Set via env
 
         # Make sure output dir exists
         mkdir -p "$output_dir"
@@ -92,8 +104,8 @@ run_recon_for_domain() {
 
         # Findomain
         log "Using Findomain..."
-        findomain --target $domain --quiet --output
-        mv "$domain.txt" "$output_dir/findomain.txt"
+        findomain --target $domain --quiet --output || true
+        [[ -f "$domain.txt" ]] && mv "$domain.txt" "$output_dir/findomain.txt" || touch "$output_dir/findomain.txt"
 
         # Chaos
         log "Using Chaos dataset..."
@@ -147,11 +159,29 @@ run_recon_for_domain() {
 
         # Combine & deduplicate all results into passive_subdomains.txt
         log "Combining and sorting results..."
-        cat $output_dir/*.txt | sort -u >$output_dir/passive_subdomains.txt
+        tmp_combined="$output_dir/tmp_combined_passive.txt"
+        cat $output_dir/*.txt 2>/dev/null | sort -u >"$tmp_combined"
+        mv "$tmp_combined" "$output_dir/passive_subdomains.txt"
 
         # Clean up all temp files except passive_subdomains.txt
         log "Cleaning up temporary files..."
         find $output_dir -type f -name '*.txt' ! -name 'passive_subdomains.txt' -delete
+
+        # Wildcard detection
+        log "Checking for wildcard DNS..."
+        wildcard_ip=$(dig +short "randomnonexistent$(date +%s).$domain" 2>/dev/null | head -1 || true)
+        if [[ -n "$wildcard_ip" ]]; then
+            log "WARNING: Wildcard DNS detected ($wildcard_ip) - filtering results..."
+            grep -v "$wildcard_ip" "$output_dir/passive_subdomains.txt" > "$output_dir/passive_filtered.txt" || true
+            mv "$output_dir/passive_filtered.txt" "$output_dir/passive_subdomains.txt"
+        fi
+
+        # DNS Resolution Validation
+        log "Validating subdomains via DNS resolution..."
+        cat "$output_dir/passive_subdomains.txt" | dnsx -silent -o "$output_dir/resolved_subdomains.txt" || true
+        if [[ -s "$output_dir/resolved_subdomains.txt" ]]; then
+            mv "$output_dir/resolved_subdomains.txt" "$output_dir/passive_subdomains.txt"
+        fi
 
         log "Passive recon completed. Results saved to $output_dir/passive_subdomains.txt"
     }
@@ -159,7 +189,7 @@ run_recon_for_domain() {
     # Active Subdomain Enumeration via FFUF Subdomain Fuzzing
     run_active_recon() {
         log "Running FFUF Subdomain Fuzzing..."
-        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt" # --> update this path to ur path
+        wordlist="/usr/share/dirb/wordlists/common.txt"
 
         # Create output directory if not exists
         mkdir -p "$output_dir"
@@ -170,7 +200,7 @@ run_recon_for_domain() {
 
         # Level 1
         log "[Level 1] Fuzzing FUZZ.$domain"
-        ffuf -w $wordlist -u "https://FUZZ.$domain" -H "Host: FUZZ.$domain" -fs 0 -s -o "$output_dir/ffuf_lvl1.json" -of json
+        ffuf -w $wordlist -u "https://FUZZ.$domain" -H "Host: FUZZ.$domain" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_lvl1.json" -of json
         level1_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl1.json")
 
         if [[ -n "$level1_results" ]]; then
@@ -180,7 +210,7 @@ run_recon_for_domain() {
             # Level 2
             for sub1 in $level1_results; do
                 log "[Level 2] Fuzzing FUZZ.$sub1.$domain"
-                ffuf -w $wordlist -u "https://FUZZ.$sub1.$domain" -H "Host: FUZZ.$sub1.$domain" -fs 0 -s -o "$output_dir/ffuf_lvl2_${sub1}.json" -of json
+                ffuf -w $wordlist -u "https://FUZZ.$sub1.$domain" -H "Host: FUZZ.$sub1.$domain" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_lvl2_${sub1}.json" -of json
                 level2_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl2_${sub1}.json")
 
                 if [[ -n "$level2_results" ]]; then
@@ -189,7 +219,7 @@ run_recon_for_domain() {
                     # Level 3
                     for sub2 in $level2_results; do
                         log "[Level 3] Fuzzing FUZZ.$sub2.$sub1.$domain"
-                        ffuf -w $wordlist -u "https://FUZZ.$sub2.$sub1.$domain" -H "Host: FUZZ.$sub2.$sub1.$domain" -fs 0 -s -o "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json" -of json
+                        ffuf -w $wordlist -u "https://FUZZ.$sub2.$sub1.$domain" -H "Host: FUZZ.$sub2.$sub1.$domain" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json" -of json
                         level3_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json")
 
                         if [[ -n "$level3_results" ]]; then
@@ -217,7 +247,7 @@ run_recon_for_domain() {
     # Fuzzing Passive Subdomins with ffuf
     run_ffuf_passive() {
         log "Fuzzing passive subdomains with ffuf..."
-        wordlist="/usr/share/dirb/wordlists/subdomains-top1million-110000.txt" # --> update this path to ur path
+        wordlist="/usr/share/dirb/wordlists/common.txt"
         passive_file="$output_dir/passive_subdomains.txt"
 
         mkdir -p "$output_dir"
@@ -236,7 +266,7 @@ run_recon_for_domain() {
                 for sub in $current_subs; do
                     log "[Level $level] Fuzzing FUZZ.$sub"
 
-                    ffuf -w "$wordlist" -u "https://FUZZ.$sub" -H "Host: FUZZ.$sub" -fs 0 -s -o "$output_dir/ffuf_${sub}_lvl${level}.json" -of json
+                    ffuf -w "$wordlist" -u "https://FUZZ.$sub" -H "Host: FUZZ.$sub" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_${sub}_lvl${level}.json" -of json
                     fuzz_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_${sub}_lvl${level}.json")
 
                     if [[ -n "$fuzz_results" ]]; then
@@ -262,130 +292,40 @@ run_recon_for_domain() {
         log "Passive fuzzing completed. Results saved to $output_dir/active_passive_subdomains.txt"
     }
 
+    # HTTP Probing 1
+    run_httpx1() {
+        log "Probing live subdomains with Httpx..."
 
+        combined_file="$output_dir/combined_subdomains.txt"
+        cat "$output_dir/active_subdomains.txt" "$output_dir/passive_subdomains.txt" "$output_dir/active_passive_subdomains.txt" 2>/dev/null | sort -u >"$combined_file"
 
-   #run_compain_subs
-   run_compain_subs() {
-    log "Running compain subs..."
-    
-    cat "$output_dir/active_subdomains.txt" "$output_dir/passive_subdomains.txt" "$output_dir/active_passive_subdomains.txt" > "$output_dir/final_live_subdomains.txt"
-    
-   }
+        cat "$combined_file" | httpx -mc 200,201,301,302,307,308,401,403,405 -fc 404,502,503,504 -timeout 10 -o "$output_dir/final_live_subdomains.txt" || true
 
+        rm -f "$combined_file"
 
-    ## Fetcing ip's here 
-    resolve_all_possible_ips() {
-    log " Resolving all possible IPs for final live subdomains..."
-
-    input_file="$output_dir/final_live_subdomains.txt"
-    output_ips="$output_dir/resolved_ips.txt"
-    unique_ips="$output_dir/unique_ips.txt"
-
-    > "$output_ips"
-    > "$unique_ips"
-
-    if [[ ! -f "$input_file" ]]; then
-        log " ERROR: $input_file not found."
-        return
-    fi
-
-    while read -r sub; do
-        log " Resolving $sub"
-
-        #  dig
-        dig_ips=$(dig +short "$sub" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}')
-        [[ -n "$dig_ips" ]] && {
-            for ip in $dig_ips; do
-                echo "$sub => $ip" | tee -a "$output_ips"
-                echo "$ip" >> "$unique_ips"
-            done
-        }
-
-        #  SecurityTrails
-        if [[ -n "$SECURITYTRAILS_KEY" ]]; then
-            curl -s -H "APIKEY: $SECURITYTRAILS_KEY" \
-                "https://api.securitytrails.com/v1/domain/$sub/dns" |
-                jq -r '.records.a[].ip' 2>/dev/null |
-                grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' >> "$unique_ips"
-        fi
-
-        #  Netlas
-        if [[ -n "$NETLAS_API_KEY" ]]; then
-            curl -s "https://app.netlas.io/api/dns?q=name:$sub" \
-                -H "X-API-Key: $NETLAS_API_KEY" |
-                jq -r '.items[].data.A[]?' >> "$unique_ips"
-        fi
-
-        #  ViewDNS.info
-        curl -s "https://viewdns.info/dnsrecord/?domain=$sub" |
-            grep -oE "([0-9]{1,3}\.){3}[0-9]{1,3}" >> "$unique_ips"
-
-        #  VirusTotal
-        if [[ -n "$VT_API_KEY" ]]; then
-            vt_resp=$(curl -s -H "x-apikey: $VT_API_KEY" \
-                "https://www.virustotal.com/api/v3/domains/$sub/resolutions")
-            echo "$vt_resp" | jq -r '.data[].attributes.ip_address' >> "$unique_ips"
-        fi
-
-    done < "$input_file"
-
-    # Final cleanup
-    sort -u "$unique_ips" > "$unique_ips.tmp" && mv "$unique_ips.tmp" "$unique_ips"
-    log " IP resolution complete. Results saved to:"
-    log "   ➤ $output_ips"
-    log "   ➤ $unique_ips"
-}
-
-
+        log "Httpx probing completed. Results saved to $output_dir/final_live_subdomains.txt"
+    }
 
     #run_dirsearch_batch
     run_dirsearch_batch() {
         log "Running Dirsearch on all live subdomains..."
 
+        input_file="$output_dir/final_live_subdomains.txt"
+        output_file="$output_dir/dirsearch_valid_urls.txt"
 
-    subdomains_file="$output_dir/final_live_subdomains.txt"
-    ips_file="$output_dir/unique_ips.txt"
-    output_dirsearch="$output_dir/dirsearch_results"
-    mkdir -p "$output_dirsearch"
-
-        if [[ ! -f "$subdomains_file" ]]; then
-            echo -e "${RED}Error:${RESET} $subdomains_file not found."
+        if [[ ! -f "$input_file" ]]; then
+            echo -e "${RED}Error:${RESET} $input_file not found."
             return
         fi
 
         dirsearch_exts="conf,config,bak,backup,swp,old,db,sql,asp,aspx,asp~,py,py~,rb,rb~,php,php~,bkp,cache,cgi,csv,html,inc,jar,js,json,jsp,jsp~,lock,log,rar,sql.gz,sql.tar.gz,sql~,swp~,tar,tar.bz2,tar.gz,txt,wadl,zip,xml"
 
-    # 1. Run Dirsearch on live subdomains
-    if [[ -f "$subdomains_file" ]]; then
-        log " Running Dirsearch on live subdomains..."
         python3 dirsearch/dirsearch.py \
-            -l "$subdomains_file" \                      # List of subdomains (one per line)
-            -e "$dirsearch_exts" \                        # File extensions to brute-force
-            -t 20 \                                       # Number of threads
-            --plain-text-report "$output_dirsearch/dirsearch_domains.txt"
-    else
-        log " Subdomains file not found: $subdomains_file"
-    fi
+            -l "$input_file" \
+            -e "$dirsearch_exts" \
+            --plain-text-report "$output_file"
 
-        # 2. Run Dirsearch on resolved IPs using Host header
-    if [[ -f "$ips_file" ]]; then
-        log " Running Dirsearch on IPs with Host: $domain"
-        for ip in $(cat "$ips_file"); do
-            for proto in http https; do
-                log "  Scanning $proto://$ip with Host: $domain"
-                python3 dirsearch/dirsearch.py \
-                    -u "$proto://$ip/" \                  # IP target
-                    -H "Host: $domain" \                  # Use domain in Host header to support virtual hosting
-                    -e "$dirsearch_exts" \                # Same extensions
-                    -t 20 \                               # Threads
-                    --plain-text-report "$output_dirsearch/dirsearch_${proto}_$ip.txt"
-            done
-        done
-    else
-        log " IPs file not found: $ips_file"
-    fi
-
-        log " Dirsearch scanning complete. Results saved in $output_dirsearch/"
+        log "Dirsearch scan completed. Results saved to $output_file"
     }
 
     # Crawling with Katana
@@ -418,36 +358,20 @@ run_recon_for_domain() {
 
     # Combine all URLs into all_urls.txt
     combine_all_urls() {
-    log " Combining Katana, Waybackurls, GAU, and Dirsearch outputs..."
+        log "Combining Katana, Waybackurls, and GAU outputs..."
+        cat "$output_dir/katana_urls.txt" \
+            "$output_dir/wayback_urls.txt" \
+            "$output_dir/gau_all_urls.txt" |
+            sort -u >"$output_dir/all_urls.txt"
 
-    all_urls="$output_dir/all_urls.txt"
-    > "$all_urls"  # clean existing file
-
-    # Combine Katana, Wayback, and GAU
-    cat "$output_dir/katana_urls.txt" \
-        "$output_dir/wayback_urls.txt" \
-        "$output_dir/gau_all_urls.txt" 2>/dev/null |
-        sort -u >> "$all_urls"
-
-    # Collect Dirsearch URLs (from plain-text reports)
-    log " Adding Dirsearch results..."
-    dirsearch_dir="$output_dir/dirsearch_results"
-    if [[ -d "$dirsearch_dir" ]]; then
-        grep -hEo "https?://[^ ]+" "$dirsearch_dir"/*.txt 2>/dev/null |
-            sort -u >> "$all_urls"
-    fi
-
-    # Final deduplication
-    sort -u "$all_urls" -o "$all_urls"
-
-    log " All URLs combined into $all_urls"
-}
+        log "All URLs combined into $output_dir/all_urls.txt"
+    }
 
     # HTTP Probing 2
     run_httpx2() {
-        log "all_urls.txt with Httpx..."
+        log "Probing all_urls.txt with Httpx..."
 
-        cat "$output_dir/all_urls.txt" | httpx -o "$output_dir/final_all_urls.txt"
+        cat "$output_dir/all_urls.txt" | httpx -mc 200,201,301,302,307,308,401,403,405 -fc 404,502,503,504 -timeout 10 -o "$output_dir/final_all_urls.txt" || true
 
         log "Httpx probing completed. Results saved to $output_dir/final_all_urls.txt"
     }
@@ -459,18 +383,245 @@ run_recon_for_domain() {
         # Create the directory if it doesn't exist
         mkdir -p "$output_dir/urls"
 
-        grep -iE '\.js([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/js_urls.txt"
-        grep -iE '\.php([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/php_urls.txt"
-        grep -iE '\.aspx([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/aspx_urls.txt"
-        grep -iE '\.jsp([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/jsp_urls.txt"
-        grep -iE '\.json([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/json_urls.txt"
-        grep -iE '\.txt([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/txt_urls.txt"
-        grep -iE '\.html([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/html_urls.txt"
-        grep -iE '\.css([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/css_urls.txt"
+        grep -iE '\.js([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/js_urls.txt" || true
+        grep -iE '\.php([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/php_urls.txt" || true
+        grep -iE '\.aspx([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/aspx_urls.txt" || true
+        grep -iE '\.jsp([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/jsp_urls.txt" || true
+        grep -iE '\.json([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/json_urls.txt" || true
+        grep -iE '\.txt([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/txt_urls.txt" || true
+        grep -iE '\.html([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/html_urls.txt" || true
+        grep -iE '\.css([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/css_urls.txt" || true
         # Keyword filters (auth-related endpoints)
-        grep -iE 'login|signin|signup|auth|register|logout|password|reset' "$output_dir/all_urls.txt" >"$output_dir/urls/auth_urls.txt"
+        grep -iE 'login|signin|signup|auth|register|logout|password|reset' "$output_dir/all_urls.txt" >"$output_dir/urls/auth_urls.txt" || true
 
         log "Filtering URLs by file extensions completed. Results saved in $output_dir."
+    }
+
+    # Shodan Hunting Module
+    run_shodan_recon() {
+        log "Running Shodan Recon..."
+        
+        # API Key check
+        if [[ -z "${SHODAN_API_KEY:-}" ]]; then
+            log "Skipping Shodan: SHODAN_API_KEY not set."
+            return
+        fi
+        
+        mkdir -p "$output_dir/shodan"
+        
+        # 1. Domain search - find subdomains via Shodan DNS
+        log "Searching Shodan for domain subdomains..."
+        curl -s "https://api.shodan.io/dns/domain/$domain?key=$SHODAN_API_KEY" | \
+            jq -r '.subdomains[]?' 2>/dev/null | sed "s|$|.$domain|" > "$output_dir/shodan/subdomains.txt" || true
+        
+        # 2. Get IPs for all discovered subdomains
+        log "Resolving IPs for Shodan host lookup..."
+        cat "$output_dir/passive_subdomains.txt" "$output_dir/shodan/subdomains.txt" 2>/dev/null | \
+            sort -u | dnsx -silent -a -resp-only 2>/dev/null | \
+            sort -u > "$output_dir/shodan/target_ips.txt" || true
+        
+        # 3. Query each IP for detailed host info (with rate limiting)
+        log "Querying Shodan for host details..."
+        > "$output_dir/shodan/host_details.jsonl"
+        while read -r ip; do
+            [[ -z "$ip" ]] && continue
+            curl -s "https://api.shodan.io/shodan/host/$ip?key=$SHODAN_API_KEY" >> "$output_dir/shodan/host_details.jsonl"
+            echo "" >> "$output_dir/shodan/host_details.jsonl"
+            sleep 1  # Rate limiting to avoid API blocks
+        done < "$output_dir/shodan/target_ips.txt"
+        
+        # 4. Extract open ports
+        log "Extracting open ports..."
+        jq -r 'select(.ip_str and .ports) | .ip_str as $ip | .ports[] | "\($ip):\(.)"' \
+            "$output_dir/shodan/host_details.jsonl" 2>/dev/null | \
+            sort -u > "$output_dir/shodan/open_ports.txt" || true
+        
+        # 5. Extract services/banners
+        log "Extracting services and banners..."
+        jq -r 'select(.data) | .data[] | "\(.ip_str):\(.port) | \(.transport // "tcp") | \(.product // "unknown") \(.version // "") | \(.info // "")"' \
+            "$output_dir/shodan/host_details.jsonl" 2>/dev/null | \
+            sort -u > "$output_dir/shodan/services.txt" || true
+        
+        # 6. Extract CVEs/Vulnerabilities
+        log "Extracting vulnerabilities..."
+        jq -r 'select(.vulns) | .ip_str as $ip | .vulns | keys[] | "\($ip),\(.)"' \
+            "$output_dir/shodan/host_details.jsonl" 2>/dev/null | \
+            sort -u > "$output_dir/shodan/cves.txt" || true
+        
+        # 7. Extract SSL certificate CNs (potential new subdomains)
+        log "Extracting SSL certificate data..."
+        jq -r '.data[]? | select(.ssl) | .ssl.cert.subject.CN? // empty' \
+            "$output_dir/shodan/host_details.jsonl" 2>/dev/null | \
+            grep -v null | grep "$domain" | sort -u > "$output_dir/shodan/ssl_cns.txt" || true
+        
+        # 8. Extract hostnames from Shodan data
+        jq -r '.hostnames[]?' "$output_dir/shodan/host_details.jsonl" 2>/dev/null | \
+            grep "$domain" | sort -u > "$output_dir/shodan/hostnames.txt" || true
+        
+        log "Shodan recon completed. Results in $output_dir/shodan/"
+    }
+
+    # Shodan Dork Hunting
+    run_shodan_dorks() {
+        log "Running Shodan dork searches..."
+        
+        if [[ -z "${SHODAN_API_KEY:-}" ]]; then
+            log "Skipping Shodan dorks: SHODAN_API_KEY not set."
+            return
+        fi
+        
+        mkdir -p "$output_dir/shodan"
+        
+        # Define dorks
+        dorks=(
+            "ssl:$domain"
+            "hostname:$domain"
+            "http.title:$domain"
+            "ssl.cert.subject.cn:$domain"
+            "ssl.cert.issuer.cn:$domain"
+        )
+        
+        > "$output_dir/shodan/dork_results.jsonl"
+        
+        for dork in "${dorks[@]}"; do
+            log "Searching: $dork"
+            encoded=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$dork'))")
+            curl -s "https://api.shodan.io/shodan/host/search?key=$SHODAN_API_KEY&query=$encoded" >> "$output_dir/shodan/dork_results.jsonl"
+            echo "" >> "$output_dir/shodan/dork_results.jsonl"
+            sleep 1
+        done
+        
+        # Extract unique IPs from dork results
+        jq -r '.matches[]?.ip_str?' "$output_dir/shodan/dork_results.jsonl" 2>/dev/null | \
+            sort -u > "$output_dir/shodan/dork_ips.txt" || true
+        
+        # Extract ports from dork results
+        jq -r '.matches[]? | "\(.ip_str):\(.port)"' "$output_dir/shodan/dork_results.jsonl" 2>/dev/null | \
+            sort -u >> "$output_dir/shodan/open_ports.txt" || true
+        
+        sort -u "$output_dir/shodan/open_ports.txt" -o "$output_dir/shodan/open_ports.txt"
+        
+        log "Shodan dork hunting completed."
+    }
+
+    # Generate Nuclei-Ready Targets
+    prepare_nuclei_targets() {
+        log "Preparing Nuclei-ready targets..."
+        
+        mkdir -p "$output_dir/nuclei"
+        
+        # 1. All live URLs (from httpx)
+        cat "$output_dir/final_live_subdomains.txt" 2>/dev/null > "$output_dir/nuclei/urls.txt" || true
+        cat "$output_dir/final_all_urls.txt" 2>/dev/null >> "$output_dir/nuclei/urls.txt" || true
+        sort -u "$output_dir/nuclei/urls.txt" -o "$output_dir/nuclei/urls.txt"
+        
+        # 2. HTTP/HTTPS targets from Shodan ports
+        log "Converting Shodan ports to HTTP targets..."
+        > "$output_dir/nuclei/shodan_http_targets.txt"
+        
+        if [[ -f "$output_dir/shodan/open_ports.txt" ]]; then
+            while read -r hostport; do
+                [[ -z "$hostport" ]] && continue
+                ip=$(echo "$hostport" | cut -d: -f1)
+                port=$(echo "$hostport" | cut -d: -f2)
+                
+                # Common HTTP ports
+                case "$port" in
+                    80|8080|8000|8008|8081|8888|3000|5000|9000)
+                        echo "http://$hostport" >> "$output_dir/nuclei/shodan_http_targets.txt"
+                        ;;
+                    443|8443|4443|9443)
+                        echo "https://$hostport" >> "$output_dir/nuclei/shodan_http_targets.txt"
+                        ;;
+                    *)
+                        # Try both for unknown ports
+                        echo "http://$hostport" >> "$output_dir/nuclei/shodan_http_targets.txt"
+                        echo "https://$hostport" >> "$output_dir/nuclei/shodan_http_targets.txt"
+                        ;;
+                esac
+            done < "$output_dir/shodan/open_ports.txt"
+        fi
+        
+        sort -u "$output_dir/nuclei/shodan_http_targets.txt" -o "$output_dir/nuclei/shodan_http_targets.txt"
+        
+        # 3. Probe Shodan targets with httpx for live validation
+        log "Probing Shodan HTTP targets..."
+        cat "$output_dir/nuclei/shodan_http_targets.txt" | \
+            httpx -silent -mc 200,201,301,302,307,308,401,403,405,500 -timeout 10 \
+            -o "$output_dir/nuclei/shodan_live.txt" 2>/dev/null || true
+        
+        # 4. Raw IP:Port targets for non-HTTP nuclei templates (network templates)
+        cp "$output_dir/shodan/open_ports.txt" "$output_dir/nuclei/network_targets.txt" 2>/dev/null || true
+        
+        # 5. Combined master target list for nuclei
+        log "Creating master nuclei target list..."
+        cat "$output_dir/nuclei/urls.txt" \
+            "$output_dir/nuclei/shodan_live.txt" 2>/dev/null | \
+            sort -u > "$output_dir/nuclei/all_targets.txt" || true
+        
+        # 6. CVE-specific targets (IPs with known vulns)
+        if [[ -f "$output_dir/shodan/cves.txt" && -s "$output_dir/shodan/cves.txt" ]]; then
+            log "Creating CVE-specific target list..."
+            cut -d',' -f1 "$output_dir/shodan/cves.txt" | sort -u > "$output_dir/nuclei/cve_ips.txt"
+            
+            # Create CVE mapping file for reference
+            cp "$output_dir/shodan/cves.txt" "$output_dir/nuclei/cve_mapping.csv"
+        fi
+        
+        # 7. Generate nuclei commands
+        cat > "$output_dir/nuclei/run_nuclei.sh" << 'NUCLEI_SCRIPT'
+#!/bin/bash
+# Auto-generated Nuclei scan commands
+
+OUTPUT_DIR="$(dirname "$0")"
+RESULTS_DIR="$OUTPUT_DIR/results"
+mkdir -p "$RESULTS_DIR"
+
+echo "[*] Running Nuclei scans..."
+
+# Full scan on all HTTP targets
+echo "[+] Scanning all HTTP targets..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -t cves/ -t vulnerabilities/ -t exposures/ -t misconfigurations/ \
+    -severity critical,high,medium -o "$RESULTS_DIR/vuln_scan.txt" -silent
+
+# Technology detection
+echo "[+] Running technology detection..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -t technologies/ -o "$RESULTS_DIR/tech_scan.txt" -silent
+
+# Network protocol scans (requires network templates)
+if [[ -f "$OUTPUT_DIR/network_targets.txt" ]]; then
+    echo "[+] Running network scans..."
+    nuclei -l "$OUTPUT_DIR/network_targets.txt" -t network/ -o "$RESULTS_DIR/network_scan.txt" -silent
+fi
+
+# CVE-specific scans on vulnerable IPs
+if [[ -f "$OUTPUT_DIR/cve_ips.txt" ]]; then
+    echo "[+] Running targeted CVE scans on known vulnerable IPs..."
+    nuclei -l "$OUTPUT_DIR/cve_ips.txt" -t cves/ -severity critical,high -o "$RESULTS_DIR/cve_targeted.txt" -silent
+fi
+
+# Exposed panels and dashboards
+echo "[+] Scanning for exposed panels..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -t exposed-panels/ -t default-logins/ \
+    -o "$RESULTS_DIR/panels_scan.txt" -silent
+
+# Takeover checks
+echo "[+] Checking for subdomain takeovers..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -t takeovers/ -o "$RESULTS_DIR/takeover_scan.txt" -silent
+
+echo "[*] Nuclei scans completed. Results in $RESULTS_DIR/"
+NUCLEI_SCRIPT
+        
+        chmod +x "$output_dir/nuclei/run_nuclei.sh"
+        
+        # Count targets
+        total_urls=$(wc -l < "$output_dir/nuclei/all_targets.txt" 2>/dev/null || echo "0")
+        total_network=$(wc -l < "$output_dir/nuclei/network_targets.txt" 2>/dev/null || echo "0")
+        
+        log "Nuclei targets prepared:"
+        log "  - HTTP targets: $total_urls"
+        log "  - Network targets: $total_network"
+        log "  - Run: $output_dir/nuclei/run_nuclei.sh"
     }
 
     # Run all modules
@@ -478,8 +629,7 @@ run_recon_for_domain() {
     run_passive_recon
     run_active_recon
     run_ffuf_passive
-    run_compain_subs
-    resolve_all_possible_ips
+    run_httpx1
     run_dirsearch_batch
     run_katana
     run_waybackurls
@@ -487,8 +637,12 @@ run_recon_for_domain() {
     combine_all_urls
     run_httpx2
     filter_urls
+    run_shodan_recon
+    run_shodan_dorks
+    prepare_nuclei_targets
 
     log "Recon automation completed. Results saved in $output_dir."
+    log "To run Nuclei scans: bash $output_dir/nuclei/run_nuclei.sh"
 }
 
 #run_recon_main() {
@@ -555,14 +709,6 @@ while getopts ":d:l:" opt; do
 done
 
 # Check if no options provided
-if [[ -z "$domain" && -z "$list" ]]; then
+if [[ -z "${domain:-}" && -z "${list:-}" ]]; then
     usage
 fi
-
-# Check dependencies
-for tool in subfinder assetfinder httpx; do
-    if ! command -v $tool &>/dev/null; then
-        echo -e "${RED}Error:${RESET} '$tool' not found. Please install it."
-        exit 1
-    fi
-done
