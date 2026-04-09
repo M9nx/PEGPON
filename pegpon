@@ -9,14 +9,17 @@ GREEN="\e[32m"
 YELLOW="\e[33m"
 RESET="\e[0m"
 
-# Check dependencies early
-REQUIRED_TOOLS=(subfinder assetfinder httpx ffuf jq curl katana waybackurls gau findomain chaos github-subdomains dnsx nuclei)
-for tool in "${REQUIRED_TOOLS[@]}"; do do
-    if ! command -v "$tool" &>/dev/null; then
-        echo -e "${RED}Error:${RESET} '$tool' not found. Please install it."
-        exit 1
-    fi
-done
+# Skip dependency check for test mode (-t)
+if [[ "${1:-}" != "-t" ]]; then
+    # Check dependencies early
+    REQUIRED_TOOLS=(subfinder assetfinder httpx ffuf jq curl katana waybackurls gau findomain chaos github-subdomains dnsx nuclei jsluice)
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        if ! command -v "$tool" &>/dev/null; then
+            echo -e "${RED}Error:${RESET} '$tool' not found. Please install it."
+            exit 1
+        fi
+    done
+fi
 
 # ┌─────────────────────────────────────────────┐
 # │                                             │
@@ -52,120 +55,128 @@ run_recon_for_domain() {
     # Passive Subdomain Enumeration
     run_passive_recon() {
         log "Running Passive Recon..."
+        
+        # Resume support
+        progress_file="$output_dir/.progress"
+        if grep -q "passive_recon:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/passive_subdomains.txt" ]]; then
+            local count=$(wc -l < "$output_dir/passive_subdomains.txt" 2>/dev/null || echo 0)
+            log "Passive recon already completed ($count subdomains). Skipping."
+            return
+        fi
 
         # Export Chaos API Key
-        export CHAOS_KEY="d34657f0-33a3-4645-be5c-e3215513852c"
-        export GITHUB_TOKEN="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"
-        export SECURITYTRAILS_KEY="30HDfBsd87UmJGh78Hd40-gNQwCKI10S"  #-->new
-        export NETLAS_API_KEY="4lmdmURzX8eRsJjiKplUdRF3WKRProY8"      #-->new
-        export ZOOMEYE_API_KEY="48A6817D-FCC3-f3535-1df3-cab4159b7fd" #-->new
-        export SHODAN_API_KEY="${SHODAN_API_KEY:-}"                   # Set via env
+        export CHAOS_KEY=""
+        export GITHUB_TOKEN=""
+        export SECURITYTRAILS_KEY=""
+        export NETLAS_API_KEY=""      
+        export ZOOMEYE_API_KEY="" 
+        export SHODAN_API_KEY=""                   # Set via env
 
         # Make sure output dir exists
         mkdir -p "$output_dir"
 
         # Subfinder
         log "Using Subfinder..."
-        subfinder -d $domain -o $output_dir/subfinder.txt
+        subfinder -d "$domain" -o "$output_dir/subfinder.txt" || true
 
         # Assetfinder
         log "Using Assetfinder..."
-        assetfinder --subs-only $domain >$output_dir/assetfinder.txt
+        assetfinder --subs-only "$domain" >"$output_dir/assetfinder.txt" || true
 
         # Sublist3r
         log "Using Sublist3r..."
-        sublist3r -d $domain -o $output_dir/sublist3r.txt
+        sublist3r -d "$domain" -o "$output_dir/sublist3r.txt" || true
 
         # crt.sh via curl
         log "Using crt.sh..."
-        curl -s "https://crt.sh/?q=%25.$domain&output=json" |
-            jq -r '.[].name_value' |
+        curl -s "https://crt.sh/?q=%25.$domain&output=json" 2>/dev/null |
+            jq -r '.[].name_value' 2>/dev/null |
             sed 's/\*\.//g' |
             grep -iE "([a-z0-9_\-]+\.)+$domain$" |
-            sort -u >$output_dir/crtsh.txt
+            sort -u >"$output_dir/crtsh.txt" || true
 
         # ShrewdEye scraping (static HTML parsing)  -->new
         log "Using ShrewdEye..."
-        curl -s "https://shrewdeye.app/?q=$domain" |
+        curl -s "https://shrewdeye.app/?q=$domain" 2>/dev/null |
             grep -oP '([a-zA-Z0-9_-]+\.)+'"$domain" |
-            sort -u >"$output_dir/shrewdeye.txt"
+            sort -u >"$output_dir/shrewdeye.txt" || true
 
         # SecurityTrails API (requires SECURITYTRAILS_KEY)  -->new
-        if [[ -z "$SECURITYTRAILS_KEY" ]]; then
+        if [[ -z "${SECURITYTRAILS_KEY:-}" ]]; then
             log "Skipping SecurityTrails: SECURITYTRAILS_KEY not set."
         else
             log "Using SecurityTrails API..."
             curl -s -H "APIKEY: $SECURITYTRAILS_KEY" \
-                "https://api.securitytrails.com/v1/domain/$domain/subdomains" |
-                jq -r '.subdomains[]' |
+                "https://api.securitytrails.com/v1/domain/$domain/subdomains" 2>/dev/null |
+                jq -r '.subdomains[]' 2>/dev/null |
                 sed "s|$|.$domain|" |
-                sort -u >"$output_dir/securitytrails.txt"
+                sort -u >"$output_dir/securitytrails.txt" || true
         fi
 
         # Findomain
         log "Using Findomain..."
-        findomain --target $domain --quiet --output || true
+        findomain --target "$domain" --quiet --output || true
         [[ -f "$domain.txt" ]] && mv "$domain.txt" "$output_dir/findomain.txt" || touch "$output_dir/findomain.txt"
 
         # Chaos
         log "Using Chaos dataset..."
-        chaos -d $domain -o $output_dir/chaos.txt
+        chaos -d "$domain" -o "$output_dir/chaos.txt" || true
 
         # GitHub Subdomains (requires GitHub token set in env var)
-        if [ ! -z "$GITHUB_TOKEN" ]; then
+        if [[ -n "${GITHUB_TOKEN:-}" ]]; then
             log "Using GitHub-subdomains..."
-            github-subdomains -d $domain -t $GITHUB_TOKEN -o $output_dir/github.txt
+            github-subdomains -d "$domain" -t "$GITHUB_TOKEN" -o "$output_dir/github.txt" || true
         else
             log "Skipping GitHub-subdomains: GITHUB_TOKEN not set."
         fi
 
         # Netlas.io (requires API key) #-->new
-        if [[ -n "$NETLAS_API_KEY" ]]; then
+        if [[ -n "${NETLAS_API_KEY:-}" ]]; then
             log "Using Netlas.io..."
             curl -s "https://app.netlas.io/api/domains?q=domain:$domain" \
-                -H "X-API-Key: $NETLAS_API_KEY" |
-                jq -r '.items[].name' |
+                -H "X-API-Key: $NETLAS_API_KEY" 2>/dev/null |
+                jq -r '.items[].name' 2>/dev/null |
                 grep "$domain" |
-                sort -u >"$output_dir/netlas.txt"
+                sort -u >"$output_dir/netlas.txt" || true
         else
             log "Skipping Netlas.io: API key not set."
         fi
 
         # Bufferover.run #-->new
         log "Using Bufferover..."
-        curl -s "https://dns.bufferover.run/dns?q=.$domain" |
-            jq -r '.FDNS_A[]?' |
+        curl -s "https://dns.bufferover.run/dns?q=.$domain" 2>/dev/null |
+            jq -r '.FDNS_A[]?' 2>/dev/null |
             cut -d',' -f2 |
             grep "$domain" |
-            sort -u >"$output_dir/bufferover.txt"
+            sort -u >"$output_dir/bufferover.txt" || true
 
         # Zoomeye (requires API key) #-->new
-        if [[ -n "$ZOOMEYE_API_KEY" ]]; then
+        if [[ -n "${ZOOMEYE_API_KEY:-}" ]]; then
             log "Using Zoomeye..."
             curl -s -H "API-KEY: $ZOOMEYE_API_KEY" \
-                "https://api.zoomeye.org/domain/search?q=$domain" |
-                jq -r '.matches[].name' |
+                "https://api.zoomeye.org/domain/search?q=$domain" 2>/dev/null |
+                jq -r '.matches[].name' 2>/dev/null |
                 grep "$domain" |
-                sort -u >"$output_dir/zoomeye.txt"
+                sort -u >"$output_dir/zoomeye.txt" || true
         else
             log "Skipping Zoomeye: API key not set."
         fi
 
         # LeakIX #-->new
         log "Using LeakIX..."
-        curl -s "https://leakix.net/domain/$domain" |
+        curl -s "https://leakix.net/domain/$domain" 2>/dev/null |
             grep -oP '([a-zA-Z0-9_-]+\.)+'"$domain" |
-            sort -u >"$output_dir/leakix.txt"
+            sort -u >"$output_dir/leakix.txt" || true
 
         # Combine & deduplicate all results into passive_subdomains.txt
         log "Combining and sorting results..."
         tmp_combined="$output_dir/tmp_combined_passive.txt"
-        cat $output_dir/*.txt 2>/dev/null | sort -u >"$tmp_combined"
-        mv "$tmp_combined" "$output_dir/passive_subdomains.txt"
+        cat "$output_dir"/*.txt 2>/dev/null | sort -u >"$tmp_combined" || true
+        mv "$tmp_combined" "$output_dir/passive_subdomains.txt" || true
 
         # Clean up all temp files except passive_subdomains.txt
         log "Cleaning up temporary files..."
-        find $output_dir -type f -name '*.txt' ! -name 'passive_subdomains.txt' -delete
+        find "$output_dir" -type f -name '*.txt' ! -name 'passive_subdomains.txt' -delete || true
 
         # Wildcard detection
         log "Checking for wildcard DNS..."
@@ -182,118 +193,200 @@ run_recon_for_domain() {
         if [[ -s "$output_dir/resolved_subdomains.txt" ]]; then
             mv "$output_dir/resolved_subdomains.txt" "$output_dir/passive_subdomains.txt"
         fi
-
+        
+        echo "passive_recon:done" >> "$progress_file"
         log "Passive recon completed. Results saved to $output_dir/passive_subdomains.txt"
     }
 
-    # Active Subdomain Enumeration via FFUF Subdomain Fuzzing
+    # Check if subdomain resolves (DNS pre-check for FFUF optimization)
+    dns_resolves() {
+        local host="$1"
+        dig +short "$host" 2>/dev/null | grep -qE '^[0-9]+\.' && return 0
+        host "$host" 2>/dev/null | grep -q "has address" && return 0
+        return 1
+    }
+
+    # Active Subdomain Enumeration via FFUF Subdomain Fuzzing (OPTIMIZED)
     run_active_recon() {
-        log "Running FFUF Subdomain Fuzzing..."
+        log "Running FFUF Subdomain Fuzzing (Optimized)..."
         wordlist="/usr/share/dirb/wordlists/common.txt"
+        
+        # Resume support - check if already completed
+        progress_file="$output_dir/.progress"
+        if grep -q "active_recon:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/active_subdomains.txt" ]]; then
+            log "Active recon already completed. Skipping. (Delete $progress_file to force re-run)"
+            return
+        fi
 
-        # Create output directory if not exists
         mkdir -p "$output_dir"
-
-        # Temporary file to collect all subs
+        
+        # Resume support - load previous results
         tmp_file="$output_dir/tmp_active_subdomains.txt"
-        >"$tmp_file"
+        processed_file="$output_dir/.ffuf_processed.txt"
+        
+        if [[ -f "$tmp_file" ]]; then
+            log "Resuming from previous run..."
+        else
+            >"$tmp_file"
+        fi
+        touch "$processed_file"
 
-        # Level 1
+        # DNS pre-check: only fuzz if base domain resolves
+        if ! dns_resolves "$domain"; then
+            log "WARNING: Base domain $domain does not resolve. Skipping FFUF."
+            touch "$output_dir/active_subdomains.txt"
+            echo "active_recon:done" >> "$progress_file"
+            return
+        fi
+
+        # Level 1 - with optimized filters
         log "[Level 1] Fuzzing FUZZ.$domain"
-        ffuf -w $wordlist -u "https://FUZZ.$domain" -H "Host: FUZZ.$domain" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_lvl1.json" -of json
-        level1_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl1.json")
+        # Filter: -fc 404 (not found), -fs 0 (empty response), -mc matches success codes
+        ffuf -w "$wordlist" -u "https://FUZZ.$domain" -H "Host: FUZZ.$domain" \
+            -mc 200,201,204,301,302,307,308,401,403,405,500 \
+            -fc 404 -fs 0 \
+            -rate 150 -timeout 5 -t 50 \
+            -s -o "$output_dir/ffuf_lvl1.json" -of json 2>/dev/null || true
+        
+        level1_results=$(jq -r '.results[].input.FUZZ // empty' "$output_dir/ffuf_lvl1.json" 2>/dev/null) || level1_results=""
 
         if [[ -n "$level1_results" ]]; then
             echo "$level1_results" | sed "s|$|.$domain|" >>"$tmp_file"
-            rm "$output_dir/ffuf_lvl1.json"
-
-            # Level 2
+            
+            # Level 2 - only for resolved subdomains
             for sub1 in $level1_results; do
-                log "[Level 2] Fuzzing FUZZ.$sub1.$domain"
-                ffuf -w $wordlist -u "https://FUZZ.$sub1.$domain" -H "Host: FUZZ.$sub1.$domain" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_lvl2_${sub1}.json" -of json
-                level2_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl2_${sub1}.json")
+                full_sub="$sub1.$domain"
+                
+                # Skip if already processed (resume support)
+                if grep -qxF "$full_sub" "$processed_file" 2>/dev/null; then
+                    log "[Level 2] Skipping $full_sub (already processed)"
+                    continue
+                fi
+                
+                # DNS pre-check - skip if doesn't resolve
+                if ! dns_resolves "$full_sub"; then
+                    log "[Level 2] Skipping $full_sub (no DNS)"
+                    echo "$full_sub" >> "$processed_file"
+                    continue
+                fi
+                
+                log "[Level 2] Fuzzing FUZZ.$full_sub"
+                ffuf -w "$wordlist" -u "https://FUZZ.$full_sub" -H "Host: FUZZ.$full_sub" \
+                    -mc 200,201,204,301,302,307,308,401,403,405,500 \
+                    -fc 404 -fs 0 \
+                    -rate 150 -timeout 5 -t 50 \
+                    -s -o "$output_dir/ffuf_lvl2_${sub1}.json" -of json 2>/dev/null || true
+                
+                level2_results=$(jq -r '.results[].input.FUZZ // empty' "$output_dir/ffuf_lvl2_${sub1}.json" 2>/dev/null) || level2_results=""
+                echo "$full_sub" >> "$processed_file"
 
                 if [[ -n "$level2_results" ]]; then
-                    echo "$level2_results" | sed "s|$|.$sub1.$domain|" >>"$tmp_file"
-
-                    # Level 3
-                    for sub2 in $level2_results; do
-                        log "[Level 3] Fuzzing FUZZ.$sub2.$sub1.$domain"
-                        ffuf -w $wordlist -u "https://FUZZ.$sub2.$sub1.$domain" -H "Host: FUZZ.$sub2.$sub1.$domain" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json" -of json
-                        level3_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json")
-
-                        if [[ -n "$level3_results" ]]; then
-                            echo "$level3_results" | sed "s|$|.$sub2.$sub1.$domain|" >>"$tmp_file"
-                        fi
-                        rm "$output_dir/ffuf_lvl3_${sub2}_${sub1}.json"
-                    done
+                    echo "$level2_results" | sed "s|$|.$full_sub|" >>"$tmp_file"
+                    # Skip level 3 - too time consuming, diminishing returns
                 fi
-                rm "$output_dir/ffuf_lvl2_${sub1}.json"
+                rm -f "$output_dir/ffuf_lvl2_${sub1}.json"
             done
         else
-            log "No results found at Level 1. Halting recursion."
-            rm "$output_dir/ffuf_lvl1.json"
+            log "No results found at Level 1."
         fi
+        rm -f "$output_dir/ffuf_lvl1.json"
 
-        # Remove duplicates and save final results
-        sort -u "$tmp_file" >"$output_dir/active_subdomains.txt"
-
-        # Clean up temp file
-        rm "$tmp_file"
-
+        # Deduplicate and save
+        sort -u "$tmp_file" >"$output_dir/active_subdomains.txt" 2>/dev/null || true
+        rm -f "$tmp_file" "$processed_file"
+        
+        echo "active_recon:done" >> "$progress_file"
         log "Active recon completed. Results saved to $output_dir/active_subdomains.txt"
     }
 
-    # Fuzzing Passive Subdomins with ffuf
+    # Fuzzing Passive Subdomains with ffuf (OPTIMIZED)
     run_ffuf_passive() {
-        log "Fuzzing passive subdomains with ffuf..."
+        log "Fuzzing passive subdomains with ffuf (Optimized)..."
         wordlist="/usr/share/dirb/wordlists/common.txt"
         passive_file="$output_dir/passive_subdomains.txt"
+        
+        # Resume support
+        progress_file="$output_dir/.progress"
+        if grep -q "ffuf_passive:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/active_passive_subdomains.txt" ]]; then
+            log "Passive FFUF already completed. Skipping."
+            return
+        fi
 
         mkdir -p "$output_dir"
 
         tmp_file="$output_dir/tmp_active_passive.txt"
-        >"$tmp_file"
+        processed_file="$output_dir/.ffuf_passive_processed.txt"
+        
+        # Resume support - append to existing results
+        if [[ -f "$tmp_file" ]]; then
+            log "Resuming passive FFUF from previous run..."
+        else
+            >"$tmp_file"
+        fi
+        touch "$processed_file"
 
-        # Loop over each passive subdomain line by line
+        # Limit to first 100 passive subdomains to avoid excessive time
+        total_passive=$(wc -l < "$passive_file" 2>/dev/null || echo 0)
+        if [[ "$total_passive" -gt 100 ]]; then
+            log "WARNING: $total_passive subdomains found. Limiting to first 100."
+            head -100 "$passive_file" > "$passive_file.limited"
+            passive_file="$passive_file.limited"
+        fi
+
         while read -r base; do
-            current_subs="$base"
+            [[ -z "$base" ]] && continue
+            
+            # Skip if already processed
+            if grep -qxF "$base" "$processed_file" 2>/dev/null; then
+                continue
+            fi
+            
+            # DNS pre-check
+            if ! dns_resolves "$base"; then
+                log "Skipping $base (no DNS resolution)"
+                echo "$base" >> "$processed_file"
+                continue
+            fi
 
-            for level in {1..3}; do
-                next_subs=""
-
-                # Loop over current subs (split by space)
-                for sub in $current_subs; do
-                    log "[Level $level] Fuzzing FUZZ.$sub"
-
-                    ffuf -w "$wordlist" -u "https://FUZZ.$sub" -H "Host: FUZZ.$sub" -fs 0 -s -rate 100 -timeout 10 -o "$output_dir/ffuf_${sub}_lvl${level}.json" -of json
-                    fuzz_results=$(jq -r '.results[].input.FUZZ' "$output_dir/ffuf_${sub}_lvl${level}.json")
-
-                    if [[ -n "$fuzz_results" ]]; then
-                        # Add discovered subs to temp file with full path
-                        echo "$fuzz_results" | sed "s|$|.$sub|" >>"$tmp_file"
-
-                        # Prepare next level subs, space-separated
-                        next_subs="$next_subs $(echo "$fuzz_results" | sed "s|$|.$sub|")"
-                    fi
-
-                    rm "$output_dir/ffuf_${sub}_lvl${level}.json"
-                done
-
-                # Update current_subs for the next level (space-separated list)
-                current_subs="$next_subs"
-            done
+            log "[Level 1] Fuzzing FUZZ.$base"
+            ffuf -w "$wordlist" -u "https://FUZZ.$base" -H "Host: FUZZ.$base" \
+                -mc 200,201,204,301,302,307,308,401,403,405,500 \
+                -fc 404 -fs 0 \
+                -rate 150 -timeout 5 -t 50 \
+                -s -o "$output_dir/ffuf_passive_${base//[^a-zA-Z0-9]/_}.json" -of json 2>/dev/null || true
+            
+            fuzz_results=$(jq -r '.results[].input.FUZZ // empty' "$output_dir/ffuf_passive_${base//[^a-zA-Z0-9]/_}.json" 2>/dev/null) || fuzz_results=""
+            
+            if [[ -n "$fuzz_results" ]]; then
+                echo "$fuzz_results" | sed "s|$|.$base|" >>"$tmp_file"
+            fi
+            
+            rm -f "$output_dir/ffuf_passive_${base//[^a-zA-Z0-9]/_}.json"
+            echo "$base" >> "$processed_file"
+            
         done <"$passive_file"
 
-        # Sort, remove duplicates, and save final result
-        sort -u "$tmp_file" >"$output_dir/active_passive_subdomains.txt"
-        rm "$tmp_file"
-
+        # Cleanup limited file
+        rm -f "$passive_file.limited"
+        
+        # Deduplicate and save
+        sort -u "$tmp_file" >"$output_dir/active_passive_subdomains.txt" 2>/dev/null || true
+        rm -f "$tmp_file" "$processed_file"
+        
+        echo "ffuf_passive:done" >> "$progress_file"
         log "Passive fuzzing completed. Results saved to $output_dir/active_passive_subdomains.txt"
     }
 
     # HTTP Probing 1
     run_httpx1() {
+        # Resume support
+        progress_file="$output_dir/.progress"
+        if grep -q "httpx1:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/final_live_subdomains.txt" ]]; then
+            local count=$(wc -l < "$output_dir/final_live_subdomains.txt" 2>/dev/null || echo 0)
+            log "HTTP probing already completed ($count live hosts). Skipping."
+            return
+        fi
+        
         log "Probing live subdomains with Httpx..."
 
         combined_file="$output_dir/combined_subdomains.txt"
@@ -302,12 +395,20 @@ run_recon_for_domain() {
         cat "$combined_file" | httpx -mc 200,201,301,302,307,308,401,403,405 -fc 404,502,503,504 -timeout 10 -o "$output_dir/final_live_subdomains.txt" || true
 
         rm -f "$combined_file"
-
+        
+        echo "httpx1:done" >> "$progress_file"
         log "Httpx probing completed. Results saved to $output_dir/final_live_subdomains.txt"
     }
 
     #run_dirsearch_batch
     run_dirsearch_batch() {
+        # Resume support
+        progress_file="$output_dir/.progress"
+        if grep -q "dirsearch:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/dirsearch_valid_urls.txt" ]]; then
+            log "Dirsearch already completed. Skipping."
+            return
+        fi
+        
         log "Running Dirsearch on all live subdomains..."
 
         input_file="$output_dir/final_live_subdomains.txt"
@@ -323,61 +424,97 @@ run_recon_for_domain() {
         python3 dirsearch/dirsearch.py \
             -l "$input_file" \
             -e "$dirsearch_exts" \
-            --plain-text-report "$output_file"
-
+            --plain-text-report "$output_file" || true
+        
+        echo "dirsearch:done" >> "$progress_file"
         log "Dirsearch scan completed. Results saved to $output_file"
     }
 
     # Crawling with Katana
     run_katana() {
+        progress_file="$output_dir/.progress"
+        if grep -q "katana:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/katana_urls.txt" ]]; then
+            log "Katana crawling already completed. Skipping."
+            return
+        fi
         log "Running Katana for web crawling..."
-        katana -list "$output_dir/final_live_subdomains.txt" -depth 3 -o "$output_dir/katana_urls.txt"
+        katana -list "$output_dir/final_live_subdomains.txt" -depth 3 -o "$output_dir/katana_urls.txt" || true
+        echo "katana:done" >> "$progress_file"
     }
 
     # Extract URLs from Wayback Machine
     run_waybackurls() {
+        progress_file="$output_dir/.progress"
+        if grep -q "wayback:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/wayback_urls.txt" ]]; then
+            log "Wayback URLs already fetched. Skipping."
+            return
+        fi
         log "Extracting URLs from Wayback Machine..."
-        cat "$output_dir/final_live_subdomains.txt" | waybackurls >"$output_dir/wayback_urls.txt"
+        cat "$output_dir/final_live_subdomains.txt" | waybackurls >"$output_dir/wayback_urls.txt" || true
+        echo "wayback:done" >> "$progress_file"
     }
 
     # Run GAU to fetch URLs
     run_gau() {
+        progress_file="$output_dir/.progress"
+        if grep -q "gau:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/gau_all_urls.txt" ]]; then
+            log "GAU already completed. Skipping."
+            return
+        fi
         log "Running GAU for historical URL fetching..."
         combined_output="$output_dir/gau_all_urls.txt"
         >"$combined_output"
 
         while read -r subdomain; do
             log "Fetching URLs for $subdomain with GAU..."
-            gau "$subdomain" >>"$combined_output"
-        done <"$output_dir/final_live_subdomains.txt"
+            gau "$subdomain" >>"$combined_output" || true
+        done <"$output_dir/final_live_subdomains.txt" || true
 
-        sort -u "$combined_output" -o "$combined_output"
-
+        sort -u "$combined_output" -o "$combined_output" 2>/dev/null || true
+        
+        echo "gau:done" >> "$progress_file"
         log "GAU completed. All URLs saved to $combined_output"
     }
 
     # Combine all URLs into all_urls.txt
     combine_all_urls() {
+        progress_file="$output_dir/.progress"
+        if grep -q "combine_urls:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/all_urls.txt" ]]; then
+            log "URLs already combined. Skipping."
+            return
+        fi
         log "Combining Katana, Waybackurls, and GAU outputs..."
         cat "$output_dir/katana_urls.txt" \
             "$output_dir/wayback_urls.txt" \
-            "$output_dir/gau_all_urls.txt" |
-            sort -u >"$output_dir/all_urls.txt"
-
+            "$output_dir/gau_all_urls.txt" 2>/dev/null |
+            sort -u >"$output_dir/all_urls.txt" || true
+        
+        echo "combine_urls:done" >> "$progress_file"
         log "All URLs combined into $output_dir/all_urls.txt"
     }
 
     # HTTP Probing 2
     run_httpx2() {
+        progress_file="$output_dir/.progress"
+        if grep -q "httpx2:done" "$progress_file" 2>/dev/null && [[ -s "$output_dir/final_all_urls.txt" ]]; then
+            log "URL probing already completed. Skipping."
+            return
+        fi
         log "Probing all_urls.txt with Httpx..."
 
         cat "$output_dir/all_urls.txt" | httpx -mc 200,201,301,302,307,308,401,403,405 -fc 404,502,503,504 -timeout 10 -o "$output_dir/final_all_urls.txt" || true
-
+        
+        echo "httpx2:done" >> "$progress_file"
         log "Httpx probing completed. Results saved to $output_dir/final_all_urls.txt"
     }
 
     # Filtering URLs by extensions
     filter_urls() {
+        progress_file="$output_dir/.progress"
+        if grep -q "filter_urls:done" "$progress_file" 2>/dev/null && [[ -d "$output_dir/urls" ]]; then
+            log "URL filtering already completed. Skipping."
+            return
+        fi
         log "Filtering URLs by file extensions..."
 
         # Create the directory if it doesn't exist
@@ -393,12 +530,238 @@ run_recon_for_domain() {
         grep -iE '\.css([/?].*)?$' "$output_dir/all_urls.txt" >"$output_dir/urls/css_urls.txt" || true
         # Keyword filters (auth-related endpoints)
         grep -iE 'login|signin|signup|auth|register|logout|password|reset' "$output_dir/all_urls.txt" >"$output_dir/urls/auth_urls.txt" || true
-
+        
+        echo "filter_urls:done" >> "$progress_file"
         log "Filtering URLs by file extensions completed. Results saved in $output_dir."
+    }
+
+    # JavaScript Analysis Module
+    run_js_analysis() {
+        progress_file="$output_dir/.progress"
+        if grep -q "js_analysis:done" "$progress_file" 2>/dev/null && [[ -f "$output_dir/js_analysis/SUMMARY.txt" ]]; then
+            log "JS analysis already completed. Skipping."
+            return
+        fi
+        log "Running JavaScript Analysis..."
+        
+        js_input="$output_dir/urls/js_urls.txt"
+        js_dir="$output_dir/js_analysis"
+        mkdir -p "$js_dir"
+        
+        if [[ ! -f "$js_input" || ! -s "$js_input" ]]; then
+            log "No JS files found. Skipping JS analysis."
+            return
+        fi
+        
+        js_count=$(wc -l < "$js_input")
+        log "Analyzing $js_count JavaScript files..."
+        
+        # 1. Download JS files for local analysis
+        log "Downloading JS files..."
+        mkdir -p "$js_dir/files"
+        > "$js_dir/downloaded.txt"
+        
+        while read -r js_url; do
+            [[ -z "$js_url" ]] && continue
+            filename=$(echo "$js_url" | md5sum | cut -d' ' -f1).js
+            curl -s -L --max-time 10 "$js_url" -o "$js_dir/files/$filename" 2>/dev/null && \
+                echo "$js_url|$filename" >> "$js_dir/downloaded.txt" || true
+        done < "$js_input"
+        
+        downloaded_count=$(find "$js_dir/files" -name "*.js" -size +0 | wc -l)
+        log "Downloaded $downloaded_count JS files."
+        
+        # 2. Extract URLs/Endpoints with jsluice
+        log "Extracting endpoints with jsluice..."
+        > "$js_dir/endpoints_raw.txt"
+        
+        for jsfile in "$js_dir/files"/*.js; do
+            [[ -f "$jsfile" ]] || continue
+            jsluice urls < "$jsfile" 2>/dev/null >> "$js_dir/endpoints_raw.txt" || true
+        done
+        
+        # Parse jsluice JSON output and extract URLs
+        jq -r '.url // empty' "$js_dir/endpoints_raw.txt" 2>/dev/null | sort -u > "$js_dir/endpoints.txt" || true
+        
+        # 3. Extract secrets with jsluice
+        log "Extracting secrets with jsluice..."
+        > "$js_dir/secrets_raw.txt"
+        
+        for jsfile in "$js_dir/files"/*.js; do
+            [[ -f "$jsfile" ]] || continue
+            jsluice secrets < "$jsfile" 2>/dev/null >> "$js_dir/secrets_raw.txt" || true
+        done
+        
+        # Parse secrets output
+        jq -r 'select(.kind and .data) | "\(.kind): \(.data)"' "$js_dir/secrets_raw.txt" 2>/dev/null | \
+            sort -u > "$js_dir/secrets.txt" || true
+        
+        # 4. Regex-based secret extraction (backup/additional patterns)
+        log "Running regex-based secret extraction..."
+        > "$js_dir/secrets_regex.txt"
+        
+        # AWS Keys
+        grep -rhoP 'AKIA[0-9A-Z]{16}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/AWS_ACCESS_KEY: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # AWS Secret Keys
+        grep -rhoP '(?<=AWS_SECRET_ACCESS_KEY["\x27=: ]{1,5})[A-Za-z0-9/+=]{40}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/AWS_SECRET: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Google API Keys
+        grep -rhoP 'AIza[0-9A-Za-z_-]{35}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/GOOGLE_API: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # GitHub Tokens
+        grep -rhoP '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/GITHUB_TOKEN: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # JWT Tokens
+        grep -rhoP 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/JWT: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Private Keys
+        grep -rhoP '\-\-\-\-\-BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY\-\-\-\-\-' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/PRIVATE_KEY_HEADER: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Slack Tokens
+        grep -rhoP 'xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/SLACK_TOKEN: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Stripe Keys
+        grep -rhoP 'sk_live_[0-9a-zA-Z]{24,}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/STRIPE_SECRET: /' >> "$js_dir/secrets_regex.txt" || true
+        grep -rhoP 'pk_live_[0-9a-zA-Z]{24,}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/STRIPE_PUBLISHABLE: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Firebase
+        grep -rhoP '[a-z0-9-]+\.firebaseio\.com' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/FIREBASE_URL: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Generic API keys (potential false positives)
+        grep -rhoP '(?i)(api[_-]?key|apikey|api[_-]?secret)["\x27=: ]{1,5}[A-Za-z0-9_-]{16,}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/GENERIC_API: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # Authorization headers
+        grep -rhoP '(?i)(authorization|bearer|token)["\x27=: ]{1,5}[A-Za-z0-9_-]{20,}' "$js_dir/files/" 2>/dev/null | sort -u | \
+            sed 's/^/AUTH_HEADER: /' >> "$js_dir/secrets_regex.txt" || true
+        
+        # 5. Extract API endpoints and paths
+        log "Extracting API paths..."
+        > "$js_dir/api_paths.txt"
+        
+        # Common API patterns
+        grep -rhoP '["'"'"'](/api/[^"'"'"'\s<>]+)["'"'"']' "$js_dir/files/" 2>/dev/null | \
+            tr -d "\"'" | sort -u >> "$js_dir/api_paths.txt" || true
+        
+        grep -rhoP '["'"'"'](/v[0-9]+/[^"'"'"'\s<>]+)["'"'"']' "$js_dir/files/" 2>/dev/null | \
+            tr -d "\"'" | sort -u >> "$js_dir/api_paths.txt" || true
+        
+        grep -rhoP '["'"'"'](/graphql[^"'"'"'\s<>]*)["'"'"']' "$js_dir/files/" 2>/dev/null | \
+            tr -d "\"'" | sort -u >> "$js_dir/api_paths.txt" || true
+        
+        # Extract full URLs from JS
+        grep -rhoP 'https?://[^"'"'"'\s<>()]+' "$js_dir/files/" 2>/dev/null | \
+            sort -u > "$js_dir/extracted_urls.txt" || true
+        
+        # 6. Extract domains/subdomains
+        log "Extracting domains from JS..."
+        grep -rhoP '(?:https?://)?([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}' "$js_dir/files/" 2>/dev/null | \
+            sed 's|https\?://||g' | sort -u > "$js_dir/domains.txt" || true
+        
+        # Filter to in-scope domains only
+        grep -i "$domain" "$js_dir/domains.txt" > "$js_dir/inscope_domains.txt" 2>/dev/null || true
+        
+        # 7. Extract potential sensitive paths
+        log "Extracting sensitive paths..."
+        grep -rhoP '["'"'"']([^"'"'"']*(?:admin|config|backup|database|debug|test|dev|staging|internal|private|secret|upload|download|export|import|dump)[^"'"'"']*)["'"'"']' "$js_dir/files/" 2>/dev/null | \
+            tr -d "\"'" | sort -u > "$js_dir/sensitive_paths.txt" || true
+        
+        # 8. Combine all secrets
+        log "Combining all findings..."
+        cat "$js_dir/secrets.txt" "$js_dir/secrets_regex.txt" 2>/dev/null | \
+            sort -u > "$js_dir/all_secrets.txt" || true
+        
+        # 9. Build full URLs from paths + live hosts
+        log "Building full URLs for testing..."
+        > "$js_dir/testable_urls.txt"
+        
+        if [[ -f "$output_dir/final_live_subdomains.txt" ]]; then
+            while read -r base_url; do
+                [[ -z "$base_url" ]] && continue
+                # Strip trailing slash
+                base_url="${base_url%/}"
+                
+                while read -r path; do
+                    [[ -z "$path" ]] && continue
+                    # Ensure path starts with /
+                    [[ "$path" != /* ]] && path="/$path"
+                    echo "${base_url}${path}" >> "$js_dir/testable_urls.txt"
+                done < "$js_dir/api_paths.txt"
+            done < <(head -20 "$output_dir/final_live_subdomains.txt")  # Limit to first 20 hosts
+        fi
+        
+        sort -u "$js_dir/testable_urls.txt" -o "$js_dir/testable_urls.txt"
+        
+        # 10. Probe extracted URLs
+        log "Probing extracted endpoints..."
+        cat "$js_dir/testable_urls.txt" "$js_dir/extracted_urls.txt" 2>/dev/null | sort -u | \
+            httpx -silent -mc 200,201,204,301,302,307,401,403,405 -timeout 5 \
+            -o "$js_dir/live_endpoints.txt" 2>/dev/null || true
+        
+        # 11. Create summary
+        endpoints_found=$(wc -l < "$js_dir/endpoints.txt" 2>/dev/null || echo 0)
+        secrets_found=$(wc -l < "$js_dir/all_secrets.txt" 2>/dev/null || echo 0)
+        api_paths_found=$(wc -l < "$js_dir/api_paths.txt" 2>/dev/null || echo 0)
+        live_endpoints=$(wc -l < "$js_dir/live_endpoints.txt" 2>/dev/null || echo 0)
+        inscope_domains=$(wc -l < "$js_dir/inscope_domains.txt" 2>/dev/null || echo 0)
+        
+        cat > "$js_dir/SUMMARY.txt" << EOF
+═══════════════════════════════════════════════════════════
+  JAVASCRIPT ANALYSIS SUMMARY - $domain
+═══════════════════════════════════════════════════════════
+
+JS Files Analyzed:    $downloaded_count
+Secrets Found:        $secrets_found
+API Paths Found:      $api_paths_found
+Live Endpoints:       $live_endpoints
+In-scope Domains:     $inscope_domains
+
+FILES:
+  - all_secrets.txt       → Leaked credentials/keys
+  - api_paths.txt         → API endpoints discovered
+  - live_endpoints.txt    → Verified live endpoints
+  - sensitive_paths.txt   → Admin/config/backup paths
+  - inscope_domains.txt   → Discovered subdomains
+  - testable_urls.txt     → Full URLs for nuclei
+
+NEXT STEPS:
+  1. Review secrets: cat $js_dir/all_secrets.txt
+  2. Test endpoints: nuclei -l $js_dir/live_endpoints.txt -t exposures/
+  3. Fuzz API paths: ffuf -w $js_dir/api_paths.txt -u https://target/FUZZ
+
+═══════════════════════════════════════════════════════════
+EOF
+        
+        cat "$js_dir/SUMMARY.txt" | tee -a "$log_file"
+        
+        # 12. Add to nuclei targets
+        if [[ -f "$js_dir/live_endpoints.txt" && -s "$js_dir/live_endpoints.txt" ]]; then
+            cat "$js_dir/live_endpoints.txt" >> "$output_dir/nuclei/all_targets.txt" 2>/dev/null || true
+            sort -u "$output_dir/nuclei/all_targets.txt" -o "$output_dir/nuclei/all_targets.txt" 2>/dev/null || true
+        fi
+        
+        echo "js_analysis:done" >> "$progress_file"
+        log "JavaScript analysis completed. Results in $js_dir/"
     }
 
     # Shodan Hunting Module
     run_shodan_recon() {
+        progress_file="$output_dir/.progress"
+        if grep -q "shodan_recon:done" "$progress_file" 2>/dev/null && [[ -d "$output_dir/shodan" ]]; then
+            log "Shodan recon already completed. Skipping."
+            return
+        fi
         log "Running Shodan Recon..."
         
         # API Key check
@@ -458,11 +821,17 @@ run_recon_for_domain() {
         jq -r '.hostnames[]?' "$output_dir/shodan/host_details.jsonl" 2>/dev/null | \
             grep "$domain" | sort -u > "$output_dir/shodan/hostnames.txt" || true
         
+        echo "shodan_recon:done" >> "$progress_file"
         log "Shodan recon completed. Results in $output_dir/shodan/"
     }
 
     # Shodan Dork Hunting
     run_shodan_dorks() {
+        progress_file="$output_dir/.progress"
+        if grep -q "shodan_dorks:done" "$progress_file" 2>/dev/null && [[ -f "$output_dir/shodan/dork_ips.txt" ]]; then
+            log "Shodan dorks already completed. Skipping."
+            return
+        fi
         log "Running Shodan dork searches..."
         
         if [[ -z "${SHODAN_API_KEY:-}" ]]; then
@@ -501,11 +870,17 @@ run_recon_for_domain() {
         
         sort -u "$output_dir/shodan/open_ports.txt" -o "$output_dir/shodan/open_ports.txt"
         
+        echo "shodan_dorks:done" >> "$progress_file"
         log "Shodan dork hunting completed."
     }
 
     # Generate Nuclei-Ready Targets
     prepare_nuclei_targets() {
+        progress_file="$output_dir/.progress"
+        if grep -q "nuclei_targets:done" "$progress_file" 2>/dev/null && [[ -f "$output_dir/nuclei/run_nuclei.sh" ]]; then
+            log "Nuclei targets already prepared. Skipping."
+            return
+        fi
         log "Preparing Nuclei-ready targets..."
         
         mkdir -p "$output_dir/nuclei"
@@ -568,51 +943,194 @@ run_recon_for_domain() {
             cp "$output_dir/shodan/cves.txt" "$output_dir/nuclei/cve_mapping.csv"
         fi
         
-        # 7. Generate nuclei commands
+        # 7. Generate nuclei commands - FAST MODE
         cat > "$output_dir/nuclei/run_nuclei.sh" << 'NUCLEI_SCRIPT'
 #!/bin/bash
-# Auto-generated Nuclei scan commands
+# Auto-generated Nuclei scan - FAST MODE (optimized for speed)
 
 OUTPUT_DIR="$(dirname "$0")"
 RESULTS_DIR="$OUTPUT_DIR/results"
 mkdir -p "$RESULTS_DIR"
 
-echo "[*] Running Nuclei scans..."
+# ══════════════════════════════════════════════════════════════
+# SPEED SETTINGS - Adjust based on your network/target tolerance
+# ══════════════════════════════════════════════════════════════
+CONCURRENCY=50          # Parallel templates
+BULK_SIZE=50            # Hosts per template batch
+RATE_LIMIT=150          # Requests per second
+TIMEOUT=5               # Seconds per request
+RETRIES=1               # Retry failed requests
+MAX_HOST_ERRORS=30      # Skip host after X errors
 
-# Full scan on all HTTP targets
-echo "[+] Scanning all HTTP targets..."
-nuclei -l "$OUTPUT_DIR/all_targets.txt" -t cves/ -t vulnerabilities/ -t exposures/ -t misconfigurations/ \
-    -severity critical,high,medium -o "$RESULTS_DIR/vuln_scan.txt" -silent
+# Common fast flags
+FAST_FLAGS="-c $CONCURRENCY -bs $BULK_SIZE -rl $RATE_LIMIT -timeout $TIMEOUT -retries $RETRIES -mhe $MAX_HOST_ERRORS -silent -nc -stats"
 
-# Technology detection
-echo "[+] Running technology detection..."
-nuclei -l "$OUTPUT_DIR/all_targets.txt" -t technologies/ -o "$RESULTS_DIR/tech_scan.txt" -silent
+echo "══════════════════════════════════════════════════════════════"
+echo "  NUCLEI FAST SCAN - $(date)"
+echo "══════════════════════════════════════════════════════════════"
+echo "[*] Targets: $(wc -l < "$OUTPUT_DIR/all_targets.txt" 2>/dev/null || echo 0)"
+echo ""
 
-# Network protocol scans (requires network templates)
-if [[ -f "$OUTPUT_DIR/network_targets.txt" ]]; then
-    echo "[+] Running network scans..."
-    nuclei -l "$OUTPUT_DIR/network_targets.txt" -t network/ -o "$RESULTS_DIR/network_scan.txt" -silent
+# ─────────────────────────────────────────────────────────────────
+# 1. CRITICAL VULNS ONLY (fastest, highest impact)
+# ─────────────────────────────────────────────────────────────────
+echo "[1/6] Critical vulnerabilities..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" \
+    -severity critical \
+    -t cves/ -t vulnerabilities/ \
+    -et "*/dos/*" -et "*/fuzz/*" -et "*time-based*" -et "*blind*" \
+    $FAST_FLAGS \
+    -o "$RESULTS_DIR/01_critical.txt" 2>/dev/null &
+PID1=$!
+
+# ─────────────────────────────────────────────────────────────────
+# 2. SUBDOMAIN TAKEOVER (fast, high impact)
+# ─────────────────────────────────────────────────────────────────
+echo "[2/6] Subdomain takeover checks..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" \
+    -t takeovers/ \
+    $FAST_FLAGS \
+    -o "$RESULTS_DIR/02_takeovers.txt" 2>/dev/null &
+PID2=$!
+
+# ─────────────────────────────────────────────────────────────────
+# 3. EXPOSED PANELS & DEFAULT CREDS (quick wins)
+# ─────────────────────────────────────────────────────────────────
+echo "[3/6] Exposed panels & default logins..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" \
+    -t exposed-panels/ -t default-logins/ \
+    -severity critical,high \
+    $FAST_FLAGS \
+    -o "$RESULTS_DIR/03_panels.txt" 2>/dev/null &
+PID3=$!
+
+# Wait for parallel scans
+wait $PID1 $PID2 $PID3
+
+# ─────────────────────────────────────────────────────────────────
+# 4. HIGH SEVERITY MISCONFIGS (fast checks only)
+# ─────────────────────────────────────────────────────────────────
+echo "[4/6] High severity misconfigurations..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" \
+    -t misconfigurations/ -t exposures/ \
+    -severity critical,high \
+    -et "*fuzz*" -et "*brute*" -et "*sqli*" -et "*xss*" \
+    $FAST_FLAGS \
+    -o "$RESULTS_DIR/04_misconfig.txt" 2>/dev/null &
+PID4=$!
+
+# ─────────────────────────────────────────────────────────────────
+# 5. CVE TARGETED (only if Shodan found vulns)
+# ─────────────────────────────────────────────────────────────────
+if [[ -f "$OUTPUT_DIR/cve_mapping.csv" && -s "$OUTPUT_DIR/cve_mapping.csv" ]]; then
+    echo "[5/6] Targeted CVE verification..."
+    
+    # Extract unique CVE IDs and create targeted scan
+    cve_ids=$(cut -d',' -f2 "$OUTPUT_DIR/cve_mapping.csv" | sort -u | head -20)
+    cve_targets=$(cut -d',' -f1 "$OUTPUT_DIR/cve_mapping.csv" | sort -u)
+    
+    # Create temp target file with http/https
+    > "$OUTPUT_DIR/cve_http_targets.txt"
+    for ip in $cve_targets; do
+        echo "http://$ip" >> "$OUTPUT_DIR/cve_http_targets.txt"
+        echo "https://$ip" >> "$OUTPUT_DIR/cve_http_targets.txt"
+    done
+    
+    # Scan with specific CVE templates
+    nuclei -l "$OUTPUT_DIR/cve_http_targets.txt" \
+        -t cves/ \
+        -severity critical,high \
+        $FAST_FLAGS \
+        -o "$RESULTS_DIR/05_cve_targeted.txt" 2>/dev/null &
+    PID5=$!
+else
+    echo "[5/6] Skipped (no CVE targets)"
+    PID5=""
 fi
 
-# CVE-specific scans on vulnerable IPs
-if [[ -f "$OUTPUT_DIR/cve_ips.txt" ]]; then
-    echo "[+] Running targeted CVE scans on known vulnerable IPs..."
-    nuclei -l "$OUTPUT_DIR/cve_ips.txt" -t cves/ -severity critical,high -o "$RESULTS_DIR/cve_targeted.txt" -silent
-fi
+# ─────────────────────────────────────────────────────────────────
+# 6. QUICK TECH FINGERPRINT (lightweight)
+# ─────────────────────────────────────────────────────────────────
+echo "[6/6] Quick technology detection..."
+nuclei -l "$OUTPUT_DIR/all_targets.txt" \
+    -t technologies/ \
+    -c 100 -bs 100 -rl 300 -timeout 3 -retries 0 -mhe 50 -silent -nc \
+    -o "$RESULTS_DIR/06_tech.txt" 2>/dev/null &
+PID6=$!
 
-# Exposed panels and dashboards
-echo "[+] Scanning for exposed panels..."
-nuclei -l "$OUTPUT_DIR/all_targets.txt" -t exposed-panels/ -t default-logins/ \
-    -o "$RESULTS_DIR/panels_scan.txt" -silent
+# Wait for remaining scans
+[[ -n "$PID5" ]] && wait $PID5
+wait $PID4 $PID6
 
-# Takeover checks
-echo "[+] Checking for subdomain takeovers..."
-nuclei -l "$OUTPUT_DIR/all_targets.txt" -t takeovers/ -o "$RESULTS_DIR/takeover_scan.txt" -silent
+# ─────────────────────────────────────────────────────────────────
+# COMBINE RESULTS
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "══════════════════════════════════════════════════════════════"
+echo "  SCAN COMPLETE - $(date)"
+echo "══════════════════════════════════════════════════════════════"
 
-echo "[*] Nuclei scans completed. Results in $RESULTS_DIR/"
+# Merge all findings
+cat "$RESULTS_DIR"/*.txt 2>/dev/null | sort -u > "$RESULTS_DIR/all_findings.txt"
+
+# Quick stats
+echo ""
+echo "FINDINGS SUMMARY:"
+echo "─────────────────"
+critical=$(grep -c "\[critical\]" "$RESULTS_DIR/all_findings.txt" 2>/dev/null || echo 0)
+high=$(grep -c "\[high\]" "$RESULTS_DIR/all_findings.txt" 2>/dev/null || echo 0)
+medium=$(grep -c "\[medium\]" "$RESULTS_DIR/all_findings.txt" 2>/dev/null || echo 0)
+takeovers=$(wc -l < "$RESULTS_DIR/02_takeovers.txt" 2>/dev/null || echo 0)
+panels=$(wc -l < "$RESULTS_DIR/03_panels.txt" 2>/dev/null || echo 0)
+
+echo "  Critical:  $critical"
+echo "  High:      $high"
+echo "  Medium:    $medium"
+echo "  Takeovers: $takeovers"
+echo "  Panels:    $panels"
+echo ""
+echo "Full results: $RESULTS_DIR/all_findings.txt"
+echo "══════════════════════════════════════════════════════════════"
 NUCLEI_SCRIPT
         
         chmod +x "$output_dir/nuclei/run_nuclei.sh"
+
+        # 8. Generate ULTRA-FAST nuclei script (critical only, ~2-5 min)
+        cat > "$output_dir/nuclei/run_nuclei_quick.sh" << 'QUICK_SCRIPT'
+#!/bin/bash
+# ULTRA-FAST Nuclei scan - Critical findings only (~2-5 minutes)
+
+OUTPUT_DIR="$(dirname "$0")"
+RESULTS_DIR="$OUTPUT_DIR/results_quick"
+mkdir -p "$RESULTS_DIR"
+
+echo "⚡ NUCLEI QUICK SCAN - Critical Only"
+echo "    Targets: $(wc -l < "$OUTPUT_DIR/all_targets.txt" 2>/dev/null || echo 0)"
+echo ""
+
+# Ultra-fast settings
+TURBO="-c 100 -bs 100 -rl 500 -timeout 3 -retries 0 -mhe 50 -silent -nc -stats"
+
+# Run all critical checks in parallel
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -severity critical -t cves/ -t vulnerabilities/ \
+    -et "*dos*" -et "*fuzz*" -et "*blind*" -et "*time*" $TURBO -o "$RESULTS_DIR/critical.txt" 2>/dev/null &
+
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -t takeovers/ $TURBO -o "$RESULTS_DIR/takeovers.txt" 2>/dev/null &
+
+nuclei -l "$OUTPUT_DIR/all_targets.txt" -t exposed-panels/ -severity critical,high \
+    $TURBO -o "$RESULTS_DIR/panels.txt" 2>/dev/null &
+
+wait
+
+# Combine
+cat "$RESULTS_DIR"/*.txt 2>/dev/null | sort -u > "$RESULTS_DIR/quick_findings.txt"
+
+echo ""
+echo "⚡ DONE - $(grep -c "" "$RESULTS_DIR/quick_findings.txt" 2>/dev/null || echo 0) findings"
+echo "   Results: $RESULTS_DIR/quick_findings.txt"
+QUICK_SCRIPT
+
+        chmod +x "$output_dir/nuclei/run_nuclei_quick.sh"
         
         # Count targets
         total_urls=$(wc -l < "$output_dir/nuclei/all_targets.txt" 2>/dev/null || echo "0")
@@ -621,10 +1139,25 @@ NUCLEI_SCRIPT
         log "Nuclei targets prepared:"
         log "  - HTTP targets: $total_urls"
         log "  - Network targets: $total_network"
-        log "  - Run: $output_dir/nuclei/run_nuclei.sh"
+        log "  - Fast scan:  bash $output_dir/nuclei/run_nuclei.sh"
+        log "  - Quick scan: bash $output_dir/nuclei/run_nuclei_quick.sh (~2-5 min)"
+        
+        echo "nuclei_targets:done" >> "$progress_file"
     }
 
-    # Run all modules
+    # Initialize progress tracking
+    progress_file="$output_dir/.progress"
+    touch "$progress_file"
+    
+    # Show resume status
+    if [[ -s "$progress_file" ]]; then
+        completed_stages=$(grep -c ":done" "$progress_file" 2>/dev/null || echo 0)
+        log "RESUME MODE: Found $completed_stages completed stages. Continuing from last checkpoint..."
+        log "Progress file: $progress_file"
+        log "To force full re-run: rm $progress_file"
+    fi
+
+    # Run all modules (each module checks its own completion status)
     log "Starting Recon Framework..."
     run_passive_recon
     run_active_recon
@@ -637,12 +1170,18 @@ NUCLEI_SCRIPT
     combine_all_urls
     run_httpx2
     filter_urls
+    run_js_analysis
     run_shodan_recon
     run_shodan_dorks
     prepare_nuclei_targets
+    
+    # Mark full completion
+    echo "FULL_RECON_COMPLETE:$(date '+%Y-%m-%d %H:%M:%S')" >> "$progress_file"
 
     log "Recon automation completed. Results saved in $output_dir."
-    log "To run Nuclei scans: bash $output_dir/nuclei/run_nuclei.sh"
+    log "Nuclei scans:"
+    log "  Quick (~2-5 min): bash $output_dir/nuclei/run_nuclei_quick.sh"
+    log "  Full  (~15-30 min): bash $output_dir/nuclei/run_nuclei.sh"
 }
 
 #run_recon_main() {
@@ -673,12 +1212,437 @@ NUCLEI_SCRIPT
 # }
 
 usage() {
-    echo -e "\nUsage: $0 -d <domain> | -l <domain_list.txt>"
+    echo -e "\nUsage: $0 -d <domain> | -l <domain_list.txt> | -t (test mode)"
+    echo -e "\nOptions:"
+    echo -e "  -d <domain>     Single domain to scan"
+    echo -e "  -l <file>       File containing list of domains"
+    echo -e "  -t              Run logic flow test with mock data"
     exit 1
 }
 
+# ═══════════════════════════════════════════════════════════════════
+# TEST MODE - Validates entire flow with mock data (no network calls)
+# ═══════════════════════════════════════════════════════════════════
+run_flow_test() {
+    # Disable strict mode for testing (we handle errors manually)
+    set +e
+    
+    echo -e "\n${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
+    echo -e "${GREEN}  PEGPON FLOW TEST - Logic Validation Mode${RESET}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}\n"
+    
+    # Check for test dependencies first
+    echo -e "${YELLOW}[0/10] Checking test dependencies...${RESET}"
+    test_tools=(grep wc cut mkdir cat rm sort)
+    missing_tools=()
+    
+    for tool in "${test_tools[@]}"; do
+        if command -v "$tool" &>/dev/null; then
+            echo -e "  ${GREEN}✓${RESET} $tool"
+        else
+            echo -e "  ${RED}✗${RESET} $tool - NOT FOUND"
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    # Check jq separately (optional for tests but needed for main tool)
+    if command -v jq &>/dev/null; then
+        echo -e "  ${GREEN}✓${RESET} jq"
+    else
+        echo -e "  ${YELLOW}!${RESET} jq - not found (needed for main tool, not tests)"
+    fi
+    
+    # Check if grep supports -P (Perl regex)
+    if echo "test" | grep -oP 'test' &>/dev/null; then
+        echo -e "  ${GREEN}✓${RESET} grep -P (Perl regex support)"
+        GREP_PERL=true
+    else
+        echo -e "  ${YELLOW}!${RESET} grep -P not supported - using basic regex"
+        GREP_PERL=false
+    fi
+    
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        echo -e "\n${RED}ERROR: Missing tools: ${missing_tools[*]}${RESET}"
+        exit 1
+    fi
+    
+    echo -e "  ${GREEN}All test dependencies OK${RESET}"
+    
+    test_domain="test.example.com"
+    test_dir="recon/_flow_test"
+    passed=0
+    failed=0
+    
+    # Cleanup previous test and create directory
+    rm -rf "$test_dir" 2>/dev/null || true
+    mkdir -p "$test_dir"
+    
+    # Initialize debug log
+    debug_log="$test_dir/debug.log"
+    echo "=== PEGPON Flow Test Debug Log ===" > "$debug_log"
+    echo "Started: $(date)" >> "$debug_log"
+    echo "Working dir: $(pwd)" >> "$debug_log"
+    echo "Grep Perl support: $GREP_PERL" >> "$debug_log"
+    echo "" >> "$debug_log"
+    
+    test_pass() {
+        echo -e "  ${GREEN}✓${RESET} $1"
+        echo "[PASS] $1" >> "$debug_log"
+        ((++passed)) || true
+    }
+    
+    test_fail() {
+        echo -e "  ${RED}✗${RESET} $1"
+        echo "[FAIL] $1" >> "$debug_log"
+        if [[ -n "${2:-}" ]]; then
+            echo -e "      ${YELLOW}Debug: $2${RESET}"
+            echo "      Debug: $2" >> "$debug_log"
+        fi
+        ((++failed)) || true
+    }
+    
+    debug() {
+        echo -e "      ${YELLOW}[DEBUG]${RESET} $1"
+        echo "[DEBUG] $1" >> "$debug_log"
+    }
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "${YELLOW}[1/10] Testing directory structure...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    mkdir -p "$test_dir/urls" "$test_dir/shodan" "$test_dir/nuclei" "$test_dir/js_analysis/files"
+    
+    [[ -d "$test_dir/urls" ]] && test_pass "Created urls directory" || test_fail "urls directory"
+    [[ -d "$test_dir/shodan" ]] && test_pass "Created shodan directory" || test_fail "shodan directory"
+    [[ -d "$test_dir/nuclei" ]] && test_pass "Created nuclei directory" || test_fail "nuclei directory"
+    [[ -d "$test_dir/js_analysis" ]] && test_pass "Created js_analysis directory" || test_fail "js_analysis directory"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[2/10] Testing mock passive subdomain data...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    cat > "$test_dir/passive_subdomains.txt" << EOF
+www.$test_domain
+api.$test_domain
+admin.$test_domain
+staging.$test_domain
+dev.$test_domain
+app.$test_domain
+cdn.$test_domain
+mail.$test_domain
+EOF
+    
+    count=$(wc -l < "$test_dir/passive_subdomains.txt")
+    [[ $count -eq 8 ]] && test_pass "Generated 8 mock subdomains" || test_fail "Subdomain count: $count"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[3/10] Testing mock active subdomains...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    cat > "$test_dir/active_subdomains.txt" << EOF
+ftp.$test_domain
+internal.$test_domain
+EOF
+    
+    cat > "$test_dir/active_passive_subdomains.txt" << EOF
+stage.api.$test_domain
+dev.admin.$test_domain
+EOF
+    
+    test_pass "Generated active subdomain files"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[4/10] Testing subdomain combination logic...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    cat "$test_dir/active_subdomains.txt" "$test_dir/passive_subdomains.txt" "$test_dir/active_passive_subdomains.txt" 2>/dev/null | sort -u > "$test_dir/combined_test.txt"
+    
+    combined_count=$(wc -l < "$test_dir/combined_test.txt")
+    [[ $combined_count -eq 12 ]] && test_pass "Combined subdomains: $combined_count unique" || test_fail "Combined count: $combined_count (expected 12)"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[5/10] Testing mock live subdomains (httpx output)...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    cat > "$test_dir/final_live_subdomains.txt" << EOF
+https://www.$test_domain
+https://api.$test_domain
+https://admin.$test_domain
+http://staging.$test_domain
+https://app.$test_domain
+EOF
+    
+    test_pass "Generated mock httpx output"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[6/10] Testing URL filtering logic...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    cat > "$test_dir/all_urls.txt" << EOF
+https://www.$test_domain/app.js
+https://www.$test_domain/main.js
+https://api.$test_domain/v1/users
+https://www.$test_domain/login
+https://www.$test_domain/admin/config.php
+https://www.$test_domain/style.css
+https://api.$test_domain/graphql
+https://www.$test_domain/auth/signin
+https://cdn.$test_domain/bundle.min.js
+https://www.$test_domain/api/v2/data.json
+EOF
+    
+    # Test JS filtering
+    grep -iE '\.js([/?].*)?$' "$test_dir/all_urls.txt" > "$test_dir/urls/js_urls.txt" || true
+    js_count=$(wc -l < "$test_dir/urls/js_urls.txt")
+    [[ $js_count -eq 3 ]] && test_pass "JS URL filter: $js_count files" || test_fail "JS filter: $js_count (expected 3)"
+    
+    # Test auth filtering
+    grep -iE 'login|signin|signup|auth|register|logout|password|reset' "$test_dir/all_urls.txt" > "$test_dir/urls/auth_urls.txt" || true
+    auth_count=$(wc -l < "$test_dir/urls/auth_urls.txt")
+    [[ $auth_count -eq 2 ]] && test_pass "Auth URL filter: $auth_count endpoints" || test_fail "Auth filter: $auth_count (expected 2)"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[7/10] Testing Shodan data processing...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    cat > "$test_dir/shodan/target_ips.txt" << EOF
+192.168.1.1
+192.168.1.2
+10.0.0.1
+EOF
+    
+    cat > "$test_dir/shodan/open_ports.txt" << EOF
+192.168.1.1:80
+192.168.1.1:443
+192.168.1.2:8080
+192.168.1.2:22
+10.0.0.1:3306
+EOF
+    
+    cat > "$test_dir/shodan/cves.txt" << EOF
+192.168.1.1,CVE-2021-44228
+192.168.1.2,CVE-2023-1234
+10.0.0.1,CVE-2022-5678
+EOF
+    
+    test_pass "Generated mock Shodan data"
+    
+    # Test port to URL conversion logic
+    > "$test_dir/nuclei/shodan_http_targets.txt"
+    while read -r hostport; do
+        [[ -z "$hostport" ]] && continue
+        port=$(echo "$hostport" | cut -d: -f2)
+        case "$port" in
+            80|8080) echo "http://$hostport" >> "$test_dir/nuclei/shodan_http_targets.txt" ;;
+            443|8443) echo "https://$hostport" >> "$test_dir/nuclei/shodan_http_targets.txt" ;;
+        esac
+    done < "$test_dir/shodan/open_ports.txt"
+    
+    http_targets=$(wc -l < "$test_dir/nuclei/shodan_http_targets.txt")
+    [[ $http_targets -eq 3 ]] && test_pass "Port-to-HTTP conversion: $http_targets targets" || test_fail "HTTP targets: $http_targets (expected 3)"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[8/10] Testing JS analysis patterns...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    
+    # Create mock JS file with secrets (keys must match regex length requirements)
+    cat > "$test_dir/js_analysis/files/test.js" << 'MOCKJS'
+// Test JavaScript file
+const API_KEY = "AIzaSyD-abc123def456ghi789jklmnopqrstuv";
+const awsKey = "AKIAIOSFODNN7EXAMPLE";
+const githubToken = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+const jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N";
+const slack = "xoxb-1234567890-1234567890-abcdefghijklmnopqrstuvwx";
+const stripe_key = "sk_live_1234567890abcdefghijklmnopqrstuv";
+
+fetch("/api/v1/users");
+fetch("/api/v2/data");
+fetch("https://api.example.com/graphql");
+
+var adminPath = "/admin/config";
+var backupUrl = "/backup/database.sql";
+MOCKJS
+    
+    debug "Created test.js file"
+    debug "File contents:"
+    cat "$test_dir/js_analysis/files/test.js" >> "$debug_log"
+    
+    if [[ "$GREP_PERL" == "true" ]]; then
+        # Test Google API key pattern
+        google_result=$(grep -oP 'AIza[0-9A-Za-z_-]{35}' "$test_dir/js_analysis/files/test.js" 2>/dev/null) || google_result=""
+        if [[ -n "$google_result" ]]; then
+            google_match=$(echo "$google_result" | wc -l | tr -d ' ')
+        else
+            google_match=0
+        fi
+        debug "Google regex result: '$google_result' count: $google_match"
+        [[ "$google_match" -ge 1 ]] && test_pass "Google API key regex matched" || test_fail "Google API key regex" "got: $google_match, result: $google_result"
+        
+        # Test AWS key pattern
+        aws_result=$(grep -oP 'AKIA[0-9A-Z]{16}' "$test_dir/js_analysis/files/test.js" 2>/dev/null) || aws_result=""
+        if [[ -n "$aws_result" ]]; then
+            aws_match=$(echo "$aws_result" | wc -l | tr -d ' ')
+        else
+            aws_match=0
+        fi
+        debug "AWS regex result: '$aws_result' count: $aws_match"
+        [[ "$aws_match" -ge 1 ]] && test_pass "AWS key regex matched" || test_fail "AWS key regex" "got: $aws_match, result: $aws_result"
+        
+        # Test GitHub token pattern
+        gh_result=$(grep -oP 'ghp_[A-Za-z0-9_]{36,}' "$test_dir/js_analysis/files/test.js" 2>/dev/null) || gh_result=""
+        if [[ -n "$gh_result" ]]; then
+            gh_match=$(echo "$gh_result" | wc -l | tr -d ' ')
+        else
+            gh_match=0
+        fi
+        debug "GitHub regex result: '$gh_result' count: $gh_match"
+        [[ "$gh_match" -ge 1 ]] && test_pass "GitHub token regex matched" || test_fail "GitHub token regex" "got: $gh_match, result: $gh_result"
+        
+        # Test JWT pattern
+        jwt_result=$(grep -oP 'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "$test_dir/js_analysis/files/test.js" 2>/dev/null) || jwt_result=""
+        if [[ -n "$jwt_result" ]]; then
+            jwt_match=$(echo "$jwt_result" | wc -l | tr -d ' ')
+        else
+            jwt_match=0
+        fi
+        debug "JWT regex result: '$jwt_result' count: $jwt_match"
+        [[ "$jwt_match" -ge 1 ]] && test_pass "JWT regex matched" || test_fail "JWT regex" "got: $jwt_match, result: $jwt_result"
+        
+        # Test API path extraction
+        api_result=$(grep -oE '"/api/[^"]+"|'"'"'/api/[^'"'"']+'"'" "$test_dir/js_analysis/files/test.js" 2>/dev/null) || api_result=""
+        if [[ -n "$api_result" ]]; then
+            api_paths=$(echo "$api_result" | wc -l | tr -d ' ')
+        else
+            api_paths=0
+        fi
+        debug "API paths result: '$api_result' count: $api_paths"
+        [[ "$api_paths" -ge 2 ]] && test_pass "API path extraction: $api_paths paths" || test_fail "API paths" "got: $api_paths, result: $api_result"
+        
+        # Test sensitive path detection
+        # Test sensitive path detection
+        sensitive_result=$(grep -oE '(admin|config|backup|database)' "$test_dir/js_analysis/files/test.js" 2>/dev/null) || sensitive_result=""
+        if [[ -n "$sensitive_result" ]]; then
+            sensitive=$(echo "$sensitive_result" | wc -l | tr -d ' ')
+        else
+            sensitive=0
+        fi
+        debug "Sensitive paths result: '$sensitive_result' count: $sensitive"
+        [[ "$sensitive" -ge 2 ]] && test_pass "Sensitive path detection: $sensitive paths" || test_fail "Sensitive paths" "got: $sensitive"
+    else
+        # Fallback to basic regex (grep -E)
+        echo -e "  ${YELLOW}Using basic regex (no Perl support)${RESET}"
+        
+        # Test Google API key pattern (basic)
+        google_match=$(grep -oE 'AIza[0-9A-Za-z_-]{35}' "$test_dir/js_analysis/files/test.js" 2>/dev/null | wc -l | tr -d ' ') || google_match=0
+        [[ "$google_match" -ge 1 ]] && test_pass "Google API key regex matched (basic)" || test_fail "Google API key regex" "count: $google_match"
+        
+        # Test AWS key pattern (basic)
+        aws_match=$(grep -oE 'AKIA[0-9A-Z]{16}' "$test_dir/js_analysis/files/test.js" 2>/dev/null | wc -l | tr -d ' ') || aws_match=0
+        [[ "$aws_match" -ge 1 ]] && test_pass "AWS key regex matched (basic)" || test_fail "AWS key regex" "count: $aws_match"
+        
+        # Test GitHub token pattern (basic)
+        gh_match=$(grep -oE 'ghp_[A-Za-z0-9_]{36,}' "$test_dir/js_analysis/files/test.js" 2>/dev/null | wc -l | tr -d ' ') || gh_match=0
+        [[ "$gh_match" -ge 1 ]] && test_pass "GitHub token regex matched (basic)" || test_fail "GitHub token regex" "count: $gh_match"
+        
+        # Test JWT pattern (basic)
+        jwt_match=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.eyJ' "$test_dir/js_analysis/files/test.js" 2>/dev/null | wc -l | tr -d ' ') || jwt_match=0
+        [[ "$jwt_match" -ge 1 ]] && test_pass "JWT regex matched (basic)" || test_fail "JWT regex" "count: $jwt_match"
+        
+        # Test API path extraction (basic)
+        api_paths=$(grep -oE '/api/[^"'"'"' ]+' "$test_dir/js_analysis/files/test.js" 2>/dev/null | wc -l | tr -d ' ') || api_paths=0
+        [[ "$api_paths" -ge 2 ]] && test_pass "API path extraction: $api_paths paths (basic)" || test_fail "API paths" "count: $api_paths"
+        
+        # Test sensitive path detection (basic)
+        sensitive=$(grep -oE '(admin|config|backup|database)' "$test_dir/js_analysis/files/test.js" 2>/dev/null | wc -l | tr -d ' ') || sensitive=0
+        [[ "$sensitive" -ge 2 ]] && test_pass "Sensitive path detection: $sensitive paths (basic)" || test_fail "Sensitive paths" "count: $sensitive"
+    fi
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[9/10] Testing nuclei target preparation...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    
+    # Combine all targets
+    cat "$test_dir/final_live_subdomains.txt" "$test_dir/nuclei/shodan_http_targets.txt" 2>/dev/null | sort -u > "$test_dir/nuclei/all_targets.txt"
+    
+    all_targets=$(wc -l < "$test_dir/nuclei/all_targets.txt" | tr -d ' ')
+    [[ "$all_targets" -ge 5 ]] && test_pass "Nuclei targets combined: $all_targets" || test_fail "Nuclei targets: $all_targets"
+    
+    # Create CVE targets
+    cut -d',' -f1 "$test_dir/shodan/cves.txt" | sort -u > "$test_dir/nuclei/cve_ips.txt"
+    cve_ips=$(wc -l < "$test_dir/nuclei/cve_ips.txt" | tr -d ' ')
+    [[ "$cve_ips" -eq 3 ]] && test_pass "CVE target IPs: $cve_ips" || test_fail "CVE IPs: $cve_ips"
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[10/10] Testing output file structure...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    
+    expected_files=(
+        "passive_subdomains.txt"
+        "active_subdomains.txt"
+        "final_live_subdomains.txt"
+        "all_urls.txt"
+        "urls/js_urls.txt"
+        "urls/auth_urls.txt"
+        "shodan/open_ports.txt"
+        "shodan/cves.txt"
+        "nuclei/all_targets.txt"
+        "nuclei/cve_ips.txt"
+        "js_analysis/files/test.js"
+    )
+    
+    for file in "${expected_files[@]}"; do
+        if [[ -f "$test_dir/$file" ]]; then
+            test_pass "File exists: $file"
+        else
+            test_fail "Missing: $file"
+        fi
+    done
+    
+    # ─────────────────────────────────────────────────────────────────
+    echo -e "\n${YELLOW}[BONUS] Checking recon tool availability...${RESET}"
+    # ─────────────────────────────────────────────────────────────────
+    recon_tools=(subfinder assetfinder httpx ffuf katana waybackurls gau findomain chaos github-subdomains dnsx nuclei jsluice)
+    available=0
+    unavailable=0
+    
+    for tool in "${recon_tools[@]}"; do
+        if command -v "$tool" &>/dev/null; then
+            echo -e "  ${GREEN}✓${RESET} $tool"
+            ((++available)) || true
+        else
+            echo -e "  ${RED}✗${RESET} $tool - not installed"
+            ((++unavailable)) || true
+        fi
+    done
+    
+    echo -e "\n  Tools ready: $available/${#recon_tools[@]}"
+    if [[ $unavailable -gt 0 ]]; then
+        echo -e "  ${YELLOW}Note: Install missing tools before running full recon${RESET}"
+    fi
+    
+    # ─────────────────────────────────────────────────────────────────
+    # SUMMARY
+    # ─────────────────────────────────────────────────────────────────
+    echo "" >> "$debug_log"
+    echo "=== Test completed: $(date) ===" >> "$debug_log"
+    echo "Passed: $passed, Failed: $failed" >> "$debug_log"
+    
+    echo -e "\n${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
+    echo -e "  TEST SUMMARY"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
+    echo -e "  ${GREEN}Passed:${RESET} $passed"
+    echo -e "  ${RED}Failed:${RESET} $failed"
+    echo -e "  Total:  $((passed + failed))"
+    echo ""
+    
+    if [[ $failed -eq 0 ]]; then
+        echo -e "  ${GREEN}✓ ALL TESTS PASSED - Flow logic is working correctly${RESET}"
+        echo -e "\n  Test output: $test_dir/"
+        echo -e "  Debug log:   $debug_log"
+        exit 0
+    else
+        echo -e "  ${RED}✗ SOME TESTS FAILED - Review errors above${RESET}"
+        echo -e "\n  ${YELLOW}Debug log: $debug_log${RESET}"
+        echo -e "  Run: cat $debug_log"
+        exit 1
+    fi
+}
+
 # Argument parsing
-while getopts ":d:l:" opt; do
+while getopts ":d:l:t" opt; do
     case $opt in
     d)
         domain="$OPTARG"
@@ -695,7 +1659,9 @@ while getopts ":d:l:" opt; do
             [[ -z "$domain" ]] && continue
             run_recon_for_domain "$domain"
         done
-
+        ;;
+    t)
+        run_flow_test
         ;;
     \?)
         echo "Invalid option: -$OPTARG"
@@ -709,6 +1675,6 @@ while getopts ":d:l:" opt; do
 done
 
 # Check if no options provided
-if [[ -z "${domain:-}" && -z "${list:-}" ]]; then
+if [[ -z "${domain:-}" && -z "${list:-}" && "${1:-}" != "-t" ]]; then
     usage
 fi
